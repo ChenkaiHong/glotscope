@@ -56,12 +56,19 @@ class TokenizerManifest:
 
     tokenizer_json_sha256: str
     vocab_size_tokenizer: int
-    vocab_size_config: int
+    vocab_size_config: int | None
     """Often differs from :attr:`vocab_size_tokenizer` — Qwen3 reports 151669 and
-    151936. Both are recorded because Tier 2's reference-set chain uses the gap."""
+    151936. Both are recorded because Tier 2's reference-set chain uses the gap.
 
-    embedding_rows: int
-    """May exceed ``|V|``. Padding rows are a reference-set source (§7.9)."""
+    ``None`` when the source cannot supply it: a bare ``tokenizer.json`` has no
+    ``config.json`` beside it. Serialized as an explicit ``null`` rather than
+    back-filled from :attr:`vocab_size_tokenizer`, because equal values are a
+    *claim* that the embedding matrix has no padding rows — and that claim is
+    exactly what §7.9's reference-set chain reads."""
+
+    embedding_rows: int | None
+    """May exceed ``|V|``. Padding rows are a reference-set source (§7.9).
+    ``None`` until weights are read; see :attr:`vocab_size_config`."""
 
     algorithm: Algorithm
     source: str

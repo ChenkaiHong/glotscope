@@ -19,12 +19,29 @@ __all__ = [
     "IncomparableError",
     "NoReferenceSetError",
     "SegmenterRequiredError",
+    "TokenizerLoadError",
     "UnsupportedCheckpointError",
 ]
 
 
 class GlotscopeError(Exception):
     """Base class for every refusal glotscope raises deliberately."""
+
+
+class TokenizerLoadError(GlotscopeError):
+    """A tokenizer could not be loaded from the source it was asked for.
+
+    Typed rather than left as a bare ``OSError`` or JSON failure so that a
+    leaderboard run can distinguish "this row could not be loaded" from "this
+    row produced a number", and never conflate the two. The offending source is
+    carried on the exception; it is deliberately not copied into the manifest,
+    which must contain no filesystem paths (§9).
+    """
+
+    def __init__(self, source: str, reason: str) -> None:
+        self.source = source
+        self.reason = reason
+        super().__init__(f"tokenizer {source!r} could not be read: {reason}")
 
 
 class CapabilityError(GlotscopeError):

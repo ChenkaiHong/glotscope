@@ -55,9 +55,9 @@ Dependencies, not dates. Anything at the same indent level is parallelisable.
 U1..U5 (blocking unknowns)
   └─ §7 spec freeze
        ├─ Tier 0                      <- no external data; start here
-       │    ├─ utf8.py    three disjoint classes; hand-built vocab test
-       │    ├─ lint.py    unreachable, byte-fallback coverage, family classifier
-       │    └─ Tokenizer.from_file / from_tiktoken / from_pretrained + manifest
+       │    ├─ utf8.py    three disjoint classes; hand-built vocab test        [done]
+       │    ├─ lint.py    unreachable, byte-fallback coverage, family classifier [done]
+       │    └─ Tokenizer.from_file [done] / from_tiktoken / from_pretrained + manifest
        │
        ├─ Tier 1 segmenter-free       <- needs FLORES+ (gated: HF_TOKEN or vendored subset)
        │    ├─ compression.py   CPT/BPT/CTC + CR (U1 resolved)
