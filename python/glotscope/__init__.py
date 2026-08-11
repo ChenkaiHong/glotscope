@@ -50,6 +50,7 @@ from glotscope.errors import (
     IncomparableError,
     NoReferenceSetError,
     SegmenterRequiredError,
+    TokenizerLoadError,
     UnsupportedCheckpointError,
 )
 from glotscope.manifest import Manifest
@@ -100,6 +101,7 @@ __all__ = [
     "TokenClass",
     "Tokenizer",
     "TokenizerFamily",
+    "TokenizerLoadError",
     "TypologicalScope",
     "UnsupportedCheckpointError",
     "WordStats",
