@@ -10,11 +10,63 @@ Newest first, under a `## YYYY-MM-DD` heading, absolute dates only. Record **wha
 
 Being gitignored is the point: it holds the reasoning, dead ends and reversals a commit log cannot.
 
-## Repository state
+## Commands
 
-Specified in full, barely implemented. `glotscope-PRD.md` (862 lines) is the spec; `python/glotscope/` holds a typed contract layer — 11 modules, `ruff` clean and `mypy --strict` clean, every metric body still `NotImplementedError`. `pyproject.toml` builds an installable 0.0.0 wheel.
+`uv` is the environment tool; CI runs exactly these steps (`.github/workflows/ci.yml`).
 
-**Not yet:** any metric implementation, any file in `tests/` (so `pytest` collects nothing and the 85% gate would fail), `.github/workflows/`, `docs/divergences.md`, the reserved PyPI name, and `git init` — this is still not a git repo, so `.gitignore` has no effect yet.
+```bash
+uv pip install --editable ".[dev]"
+
+uv run --no-sync ruff check python/glotscope tests
+uv run --no-sync ruff format --check python/glotscope tests
+uv run --no-sync mypy --strict python/glotscope tests
+uv run --no-sync pytest --cov=glotscope --cov-report=term-missing -q   # gate: 85%
+```
+
+Baseline as of 11 Aug 2026: **64 tests pass, 96.77% coverage**, ruff/format/mypy clean. Coverage below 85% fails the run, so `--cov` is not optional when judging a change.
+
+Single test / subset:
+
+```bash
+uv run --no-sync pytest tests/test_renyi.py -q
+uv run --no-sync pytest -m "reference and not network and not gated" -q
+```
+
+Markers (`--strict-markers` is on, so an unregistered marker is an error): `reference`, `property`, `segmenter`, `gated`, `network`.
+
+Packaging — never build or upload by hand; the `Makefile` chains the guards:
+
+```bash
+make build          # uv build into dist/
+make leak-check     # build + assert no PRD/HISTORY/.env/key/pyc in the artifacts
+make twine-check    # leak-check + twine 7.0.0 check
+make upload                     # -> testpypi (default)
+make upload REPOSITORY=pypi     # -> PyPI
+```
+
+`make leak-check` is mandatory after any change to `pyproject.toml` packaging keys. A published sdist cannot be retracted; `include` is an allowlist and `exclude` is a second guard.
+
+## Repository state (11 Aug 2026)
+
+M0 is frozen and merged. Git repo with public remote `ChenkaiHong/glotscope`; **the default branch is `foundation`, not `main`** — CI push events trigger on `foundation` and PRs target it. `master` is a stale local branch.
+
+Implemented and tested: `metrics.py` (Rényi, parity, Gini), `utf8.py` (three-class classification + `Tier0Report` assembly), the contract layer (`enums`/`errors`/`results`/`report`/`manifest`/`corpus`/`tokenizer`/`embeddings`), and `scripts/audit_ud_licenses.py` + `data/ud-license-audit.json` (353 UD 2.18 treebanks; fail-closed README/`LICENSE.txt` agreement — 268 commercial, 31 noncommercial, 54 manual review).
+
+Still `NotImplementedError`: the four `aggregate.py` folds (`aggregate_documents`, `aggregate_words`, `attribute_scripts`, `align_boundaries`). Every `cli.py` handler is a stub that prints its milestone and exits `2`. No `tier0/`/`tier1/`/`tier2/` packages — deliberately not stubbed (`docs/build-order.md`); their contracts are already pinned by the `Tier1Report` methods and the `aggregate` boundary.
+
+Not yet written: the `glotscope verify` CI job against a committed `result.json` (G4), the nightly leaderboard re-run, `leaderboard.yaml`, `results/`. The 12-cell quality matrix (3.10–3.13 × {ubuntu, macos, windows}) is implemented and green.
+
+Blocking unknowns U1–U5 are **resolved** — evidence in `docs/m0-source-audit.md`, sequencing in `docs/build-order.md`, discrepancies in `docs/divergences.md`. Two PRD items remain `UNVERIFIED` and must not be cited: the gated Command-R / Command-A / Aya Expanse / Gemma 2 vocab sizes, and the Phi-3/3.5 and ByT5 vocab sizes.
+
+PyPI name reserved 10 Aug 2026 with a 0.0.0 placeholder.
+
+## Private documents live in a sibling repo
+
+`glotscope-PRD.md` and `HISTORY.md` in the repo root are **symlinks** into `../glotscope-internal/` — a separate private git repo (`ChenkaiHong/glotscope-internal`, branch `docs/internal-record`). Editing either writes into that repo and needs its own commit and push there; nothing in this tree records their content. Both paths are gitignored here and excluded from every distribution — the PRD was once committed and had to be purged from history, which is why the leak check exists.
+
+`PROGRESS.md` (gitignored) is the short live state file: Done / Next / Blocked. Keep it current during long or unattended work — `AGENTS.md` requires it alongside `HISTORY.md`.
+
+## Normative sources
 
 **The PRD is normative, not aspirational.** Its own §0: *"This is a build spec, not a proposal."* §7 says: *"Implementations must match these formulas exactly; deviations are bugs."* Appendix A (D1–D18) records decisions that are **made** — do not re-survey them, re-open them, or "improve" on them without the user explicitly reversing the decision.
 
@@ -37,11 +89,11 @@ Anything requiring a forward pass is Tier 3 and out of scope. When a published r
 
 ## Toolchain (committed by the PRD — do not substitute)
 
-No commands exist yet. When scaffolding, use exactly these; §12.4 and §13 pin them:
+§12.4 and §13 pin these; the first five are already wired into `pyproject.toml` and CI:
 
 - `pytest` — tests; `hypothesis` for the property tests in §12.2
 - `mypy --strict`
-- `ruff` (not black/flake8/isort)
+- `ruff` (not black/flake8/isort — this overrides the global Python style rules)
 - Coverage gate **≥85% line coverage** (G1)
 - CI matrix: Python **3.10–3.13** × {ubuntu, macos, windows}
 - v2 Rust: `maturin` mixed layout, `python-source = "python"`, `module-name = "glotscope._core"`, `abi3-py310`, PyO3 0.29 post-0.26 idioms (`Python::attach`, never `with_gil`), `tokenizers = { version = "0.23", default-features = false }`
@@ -52,6 +104,32 @@ Two CI jobs are load-bearing and easy to forget:
 2. **Nightly leaderboard re-run against pinned revisions that fails if any published number moves** — silent upstream tokenizer changes are otherwise undetectable.
 
 Extras: all segmenters are optional (`pip install glotscope[segmenters]`). MeCab needs a native build, PyICU needs system ICU. G1 promises green Windows CI for the **core install only**; segmenter tests skip-with-message.
+
+## How the package is wired
+
+`python/glotscope/` (maturin mixed layout — the directory is `python/` now so the v2 switch is a build-backend change, not a directory move):
+
+| Module | Role |
+|---|---|
+| `enums.py` | closed vocabularies; **the string values ARE the §9 manifest schema** — renaming one breaks committed `result.json` |
+| `errors.py` | the typed refusals. Nothing here is a fallback path; catching one and substituting a default is the bug it exists to prevent |
+| `aggregate.py` | the v1↔v2 FFI boundary: ints in, frozen struct out, one call per batch, never a `str` |
+| `results.py` | metric results carrying their own comparability parameters (what `IncomparableError` checks against) |
+| `report.py` | `Tier0/1/2Report` + the spanning `Report` |
+| `manifest.py` | §9 provenance + `canonical_json` for bit-identical reproduction |
+| `corpus.py` | capability gating + the §10.1 registry |
+| `tokenizer.py` / `embeddings.py` | the §8.1 entry points; `Embeddings` refuses quantized dtypes |
+| `metrics.py` | pure Tier 1 calculations, no I/O |
+| `utf8.py` | Tier 0 UTF-8 classification |
+| `cli.py` | the six §8.2 subcommands via stdlib `argparse` (no CLI framework — the core dependency list is load-bearing for G1) |
+
+Three invariants are enforced structurally rather than by comment, and are already tested — preserve the shape, not just the behaviour:
+
+- `Tier0Report.stage1_exclusions()` unions exactly partial-UTF-8 + unreachable + special. The wider ill-formed set is not reachable from it, so §7.9 Stage 1 cannot over-exclude by accident.
+- `BoundaryCounts` exposes no recall without precision.
+- `MorphologyResult` raises if an `OUT_OF_SCOPE` language carries a measure value.
+
+`glotscope.backend()` reads `GLOTSCOPE_IMPLEMENTATION` **before** attempting any import, and raises rather than silently downgrading `rust` → `python`. A silent downgrade would make v2 backend-parity CI vacuous; keep that ordering.
 
 ## Invariants that a naive implementation will violate
 
@@ -89,7 +167,7 @@ These are the traps §7 exists to prevent. Each one is a silently-plausible wron
 
 **`docs/divergences.md` is a deliverable, not a scratch file.** Where a reference value does not reproduce: document the discrepancy, never tune until it matches. §17 calls a silently-tuned value misconduct. G3's exit condition (§12.1) is that **every §7 subsection has either a reference test or a `divergences.md` entry** — M3 cannot exit otherwise.
 
-**Ship no corpora** (D12). Download recipes + SHA-256 + SPDX license field per resource, plus `--license-filter=commercial`. UD needs a per-treebank license audit (M0 deliverable).
+**Ship no corpora** (D12). Download recipes + SHA-256 + SPDX license field per resource, plus `--license-filter=commercial`. The UD per-treebank audit is done for 2.18 (`data/ud-license-audit.json`, regenerated deterministically by `scripts/audit_ud_licenses.py` — regenerate rather than hand-edit, and a new UD release means a new audit).
 
 **Mirror-sourced tokenizers** are pinned by commit revision, publish `tokenizer.json` SHA-256, and are **visibly labelled** in the leaderboard. Gated resources skip-with-message; never fail the run.
 
@@ -115,4 +193,6 @@ Grep the PRD rather than re-reading 77 KB:
 
 Milestones have **binary** exit criteria (§15) — nothing is done on judgment. Ship order is front-loaded: **v0.1.0 to PyPI at M1 (18 Sep 2026)**, before the paper and before Rust (D15). Under schedule pressure the cut order is fixed: **M5 (Rust) → extended language set → HF Space → M4 model count (floor 8) →** *never* M1 or M2.
 
-Cheapest high-value work, in order: the two Zouhar Rényi reference values (§12.1, tolerance 1e-9, **no external dependency**), the hand-built UTF-8 vocabulary test, and the `parity_L(L) = 1.0` identity. Reserve the PyPI name with a 0.0.0 placeholder in week 1 — `tokscope` was taken in July.
+The four cheapest high-value tests are **done** (Zouhar Rényi pair at 1e-9, hand-built UTF-8 vocabulary, `parity_L(L) = 1.0`, `Gini([1,2,3,4,5]) == 4/15`), as is the PyPI reservation. Next work is selected from the frozen order in `docs/build-order.md`: Tier 0 (`lint.py`, `Tokenizer.from_*`) needs no external data and is the head of the queue; Tier 1 segmenter-free work needs FLORES+ (gated), and Tier 1 word-level work needs the segmenter extras.
+
+Branch per task off `origin/foundation`, and do not push to `foundation` directly — the reviewed history goes through PRs.
