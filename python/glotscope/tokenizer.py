@@ -7,18 +7,45 @@ the library's claims about other people's tokenizers credible.
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from glotscope.enums import Normalization, Segmenter
+from tokenizers import Tokenizer as BackendTokenizer
+
+from glotscope.enums import Algorithm, Normalization, Segmenter
+from glotscope.errors import TokenizerLoadError
+from glotscope.lint import detect_algorithm, lint_backend
+from glotscope.manifest import TokenizerManifest
 from glotscope.report import Tier0Report, Tier1Report, Tier2Report
 
 if TYPE_CHECKING:
     from glotscope.corpus import Corpus
     from glotscope.embeddings import Embeddings
-    from glotscope.manifest import TokenizerManifest
 
 __all__ = ["Tokenizer"]
+
+_LOCAL_REVISION = "local"
+"""Recorded where an upstream revision does not exist. A local file has no commit
+to pin, and inventing one would put an unverifiable string in the field
+``glotscope verify`` trusts."""
+
+_UNKNOWN_LICENSE = "UNKNOWN"
+
+_NO_REVISION_WARNING = (
+    "local tokenizer.json: no upstream revision exists, so revision is recorded "
+    "as 'local' and the artifact's identity rests on tokenizer_json_sha256"
+)
+_NO_CONFIG_WARNING = (
+    "local tokenizer.json: vocab_size_config and embedding_rows are unknown and "
+    "recorded as null; load the checkpoint to fill them"
+)
+_UNKNOWN_ALGORITHM_WARNING = (
+    "algorithm could not be identified from tokenizer.json and is recorded as "
+    "'unknown'; §7.9 is validated on BPE only"
+)
 
 
 class Tokenizer:
@@ -29,11 +56,37 @@ class Tokenizer:
     needs and what no competing tool captures.
     """
 
+    _backend: Any
+    _spec: Mapping[str, Any]
+    _manifest: TokenizerManifest
+    _warnings: tuple[str, ...]
+
     def __init__(self) -> None:
         raise TypeError(
             "construct a Tokenizer through from_pretrained(), from_tiktoken() or "
             "from_file(); direct construction would skip provenance capture (G4)"
         )
+
+    @classmethod
+    def _loaded(
+        cls,
+        *,
+        backend: Any,
+        spec: Mapping[str, Any],
+        manifest: TokenizerManifest,
+        warnings: tuple[str, ...],
+    ) -> Tokenizer:
+        """Assemble an instance around an already-captured provenance record.
+
+        Bypasses :meth:`__init__` deliberately: the refusal there is what keeps
+        construction on the paths that capture provenance.
+        """
+        tokenizer = object.__new__(cls)
+        tokenizer._backend = backend
+        tokenizer._spec = spec
+        tokenizer._manifest = manifest
+        tokenizer._warnings = warnings
+        return tokenizer
 
     # -- construction -------------------------------------------------------
 
@@ -77,16 +130,80 @@ class Tokenizer:
         raise NotImplementedError
 
     @classmethod
-    def from_file(cls, path: str | Path) -> Tokenizer:
-        """Load a local ``tokenizer.json``."""
-        raise NotImplementedError
+    def from_file(
+        cls,
+        path: str | Path,
+        *,
+        tokenizer_id: str | None = None,
+        license_spdx: str = _UNKNOWN_LICENSE,
+    ) -> Tokenizer:
+        """Load a local ``tokenizer.json``.
+
+        The file's bytes are read once and used for all three of the parsed spec,
+        the backend tokenizer and ``tokenizer_json_sha256``, so the hash in the
+        manifest is provably the hash of what was analysed rather than of whatever
+        the path pointed at a moment later.
+
+        ``tokenizer_id`` names the artifact in the manifest and defaults to
+        ``"local"`` rather than the filename: §9 manifests carry no filesystem
+        paths, because a path is a property of one machine and would break the
+        bit-identical regeneration ``glotscope verify`` asserts.
+
+        Raises:
+            TokenizerLoadError: if the file cannot be read, or is not a valid
+                ``tokenizer.json``.
+        """
+        source = Path(path)
+        try:
+            raw = source.read_bytes()
+        except OSError as exc:
+            raise TokenizerLoadError(source.name, str(exc)) from exc
+
+        try:
+            text = raw.decode("utf-8")
+            spec: Mapping[str, Any] = json.loads(text)
+            backend = BackendTokenizer.from_str(text)
+        except Exception as exc:
+            # The backend raises its own Rust-side exception type for a malformed
+            # document, so this catch is broad on purpose; the alternative is
+            # letting an untyped foreign exception escape the public API.
+            raise TokenizerLoadError(source.name, f"not a valid tokenizer.json ({exc})") from exc
+
+        algorithm = detect_algorithm(spec)
+        warnings = [_NO_REVISION_WARNING, _NO_CONFIG_WARNING]
+        if algorithm is Algorithm.UNKNOWN:
+            warnings.append(_UNKNOWN_ALGORITHM_WARNING)
+
+        manifest = TokenizerManifest(
+            id=tokenizer_id or _LOCAL_REVISION,
+            revision=_LOCAL_REVISION,
+            tokenizer_json_sha256=hashlib.sha256(raw).hexdigest(),
+            vocab_size_tokenizer=backend.get_vocab_size(with_added_tokens=True),
+            vocab_size_config=None,
+            embedding_rows=None,
+            algorithm=algorithm,
+            source="file",
+            source_is_mirror=False,
+            license_spdx=license_spdx,
+        )
+        return cls._loaded(backend=backend, spec=spec, manifest=manifest, warnings=tuple(warnings))
 
     # -- provenance ---------------------------------------------------------
 
     @property
     def manifest(self) -> TokenizerManifest:
         """Provenance for this tokenizer, ready to embed in a result (§9)."""
-        raise NotImplementedError
+        return self._manifest
+
+    @property
+    def warnings(self) -> tuple[str, ...]:
+        """Contested or incomplete provenance, for the §9 ``warnings`` array.
+
+        Load-bearing, not decorative: a null ``embedding_rows`` is invisible in a
+        table of numbers, and a reader needs the difference between "no padding
+        rows" and "nobody looked".
+        """
+        return self._warnings
 
     # -- tiers --------------------------------------------------------------
 
@@ -95,7 +212,7 @@ class Tokenizer:
 
         Always available and costs milliseconds. Needs no corpus and no weights.
         """
-        raise NotImplementedError
+        return lint_backend(self._backend, self._spec)
 
     def analyze(
         self,
