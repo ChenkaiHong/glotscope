@@ -36,6 +36,8 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://pypi.org/project/glotscope/"
+Repository = "https://github.com/ChenkaiHong/glotscope"
+Issues = "https://github.com/ChenkaiHong/glotscope/issues"
 
 # All segmenters are optional (PRD §10.3). MeCab needs a native build and a
 # dictionary; PyICU needs system ICU. G1 promises green Windows CI for the core
