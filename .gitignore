@@ -34,6 +34,7 @@ PROGRESS.md
 
 # Downloaded corpora and checkpoints — never committed (D12).
 # Recipes and checksums are committed; the artifacts are not.
-data/
+data/*
+!data/ud-license-audit.json
 corpora/
 *.safetensors

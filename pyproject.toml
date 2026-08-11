@@ -73,8 +73,11 @@ packages = ["python/glotscope"]
 # distribution. A published sdist cannot be retracted, so `include` is an allowlist and
 # `exclude` is a second guard. Re-run a leak check after any packaging change.
 [tool.hatch.build.targets.sdist]
-include = ["python/", "tests/", "docs/", "LICENSE", "README.md"]
+include = ["python/", "tests/", "docs/", "scripts/", "LICENSE", "README.md"]
 exclude = ["glotscope-PRD.md", "HISTORY.md"]
+
+[tool.hatch.build.targets.sdist.force-include]
+"data/ud-license-audit.json" = "data/ud-license-audit.json"
 
 # ---------------------------------------------------------------------------
 # Tooling. Pinned by PRD §12.4 — ruff, not black/flake8/isort; mypy --strict.

@@ -50,10 +50,9 @@ class DocumentStats:
     * ``CTC`` is :attr:`total_tokens` (PRD §7.2).
     * ``CPT``/``BPT`` are :attr:`total_chars`/:attr:`total_bytes` over
       :attr:`total_tokens` — ratios of totals, not means of ratios.
-    * ``CR`` (TokEval's compression rate) is a mean of per-segment ratios and so
-      needs :attr:`per_document_tokens` alongside the caller's own per-document
-      char/byte lengths. It is *not* the ratio of the means: by Jensen's
-      inequality it over-weights short segments.
+    * ``CR`` (TokEval's compression rate) is total measured units over total
+      tokens after invalid records are excluded. Its default unit is UTF-8 bytes,
+      making the default CR numerically identical to BPT.
     * Renyi efficiency needs :attr:`type_counts`, the token-type frequency
       distribution.
     """
