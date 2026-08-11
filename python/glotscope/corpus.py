@@ -6,10 +6,9 @@ monolingual corpus raises :class:`~glotscope.errors.CapabilityError` rather than
 silently computing a meaningless number, and §6 identifies that as preventing the
 most common category of wrong result in this space.
 
-Ships no corpora (D12). The registry holds download recipes, SHA-256 checksums
-and an SPDX license field per resource; UD requires a per-treebank license audit
-because the default for new repos is CC BY-SA 4.0 but an unknown subset is
-CC BY-NC-SA 4.0.
+Ships no corpora (D12). Download recipes, SHA-256 checksums, and SPDX license
+fields are release-pinned. The UD 2.18 per-treebank audit is generated from the
+official archive and stored in ``data/ud-license-audit.json``.
 """
 
 from __future__ import annotations
@@ -70,11 +69,12 @@ REGISTRY: dict[str, CorpusSpec] = {
     "universal_dependencies": CorpusSpec(
         id="universal_dependencies",
         capabilities=frozenset({Capability.WORD_SEGMENTATION, Capability.MORPH_GOLD}),
-        license="Per-treebank — audit required",
+        license="Per-treebank — see data/ud-license-audit.json",
         is_commercial_ok=False,
-        note="The biggest legal trap in the stack. License varies per treebank; "
-        "the M0 audit is a deliverable, not an afterthought. Record the treebank, "
-        "because UD Korean treebanks disagree among themselves.",
+        note="The UD 2.18 audit covers all 353 treebanks: 268 are commercial-compatible, "
+        "31 are noncommercial, and 54 require manual review. Record the exact treebank "
+        "because Korean "
+        "treebanks, for example, use different segmentation conventions.",
     ),
     "morphynet": CorpusSpec(
         id="morphynet",

@@ -125,14 +125,12 @@ class CompressionResult:
     """Corpus token count."""
 
     compression_rate: float
-    """TokEval's ``CR``: a mean of per-segment ratios, and therefore *not* the
-    ratio of the means. By Jensen's inequality it over-weights short segments."""
+    """TokEval's ``CR``: total measured units divided by total tokens after
+    excluding blank, zero-unit, and empty-tokenization records."""
 
     compression_rate_unit: str
-    """``"chars"`` or ``"bytes"``. Recorded because the source's normalization
-    unit is the highest-risk ambiguity in §7 — a form circulating without a
-    numerator is dimensionally wrong, and must be resolved from TokEval's source
-    before the spec freeze."""
+    """``"chars"`` or ``"bytes"``; TokEval defaults to UTF-8 bytes. The unit is
+    recorded because byte and character normalization are not interchangeable."""
 
     def comparability_key(self) -> Mapping[str, object]:
         return {"compression_rate_unit": self.compression_rate_unit}

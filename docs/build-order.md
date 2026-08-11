@@ -6,17 +6,17 @@ decisions and rationale are not restated here — two copies of a normative spec
 
 ## Blocking unknowns
 
-Five things must be resolved by reading a source, not by reasoning. Each gates work downstream, and
-each is scheduled to be discovered *early* rather than at the milestone that depends on it. All five
-are M0 deliverables (window: **Mon 10 – Fri 21 Aug 2026**).
+Five things had to be resolved by reading a source, not by reasoning. Each gated work downstream and
+was investigated during M0 (window: **Mon 10 – Fri 21 Aug 2026**). The evidence and pinned revisions
+are recorded in [`m0-source-audit.md`](m0-source-audit.md).
 
-| # | Question | Read | Blocks | If unresolved |
-|---|---|---|---|---|
-| U1 | TokEval's compression-rate normalization unit — chars or bytes, and does the published prose form drop its numerator? | `cimeister/tokenizer-intrinsic-evals` source | §7.2 spec freeze, `CompressionResult.compression_rate_unit` | §7.2 calls this the highest-risk formula in the document: a wrong version is silently plausible. Do not implement CR from prose. |
-| U2 | Poelman et al.'s exact full-alignment F1 definition | `LAGoM-NLP/ConfoundingFactors` | §7.7(c) gating, `align_boundaries` | Ship `gathered → 0.25` as the regression test (verified reproducing) and log the Turkish rows as a divergence. Never gate on a value you cannot derive. |
-| U3 | Did `swiss-ai/parity-aware-bpe` publish its trained tokenizers? | HF Hub | 4 of the §12.1 Gini reference rows | Drop those rows; validate Gini against the §12.2 property tests alone. Decide at M0, not at M3. |
-| U4 | TokEval's actual license (page renders MIT, API reports `NOASSERTION`, no LICENSE file resolves) | GitHub + the repo tree | Whether any of their code may be reused at all | Assume unusable. Reimplement from the papers. |
-| U5 | UD per-treebank license audit — which treebanks are CC BY-NC-SA rather than CC BY-SA | Each treebank's metadata | `Corpus.universal_dependencies`, `--license-filter=commercial` | §10.4 calls UD the biggest legal trap in the stack. The audit is a deliverable, not an afterthought. |
+| # | Question | M0 outcome |
+|---|---|---|
+| U1 | TokEval compression-rate formula and unit | **Resolved.** Ratio of total measured units to total tokens; default unit UTF-8 bytes. |
+| U2 | Poelman et al. full-alignment F1 | **Resolved.** Micro-aggregated exact-boundary precision/recall/F1. The Turkish toy value is an upstream inconsistency. |
+| U3 | Published parity-aware BPE tokenizers | **Resolved unavailable.** Training code exists, but no trained artifacts or immutable revisions were published; numerical reference rows are not gates. |
+| U4 | TokEval license | **Resolved.** The current pinned repository contains an MIT license covering its source code. |
+| U5 | UD per-treebank licenses | **Resolved for UD 2.18.** The generated audit records all 353 treebanks; fail-closed README/`LICENSE.txt` agreement leaves 268 commercial-compatible, 31 noncommercial, and 54 for manual review. |
 
 Two more items are `UNVERIFIED` in the PRD and must not be cited until checked: the gated Command-R /
 Command-A / Aya Expanse / Gemma 2 vocabulary sizes, and the Phi-3/3.5 and ByT5 vocabulary sizes.
@@ -60,10 +60,10 @@ U1..U5 (blocking unknowns)
        │    └─ Tokenizer.from_file / from_tiktoken / from_pretrained + manifest
        │
        ├─ Tier 1 segmenter-free       <- needs FLORES+ (gated: HF_TOKEN or vendored subset)
-       │    ├─ compression.py   CPT/BPT/CTC + CR (blocked on U1)
+       │    ├─ compression.py   CPT/BPT/CTC + CR (U1 resolved)
        │    ├─ renyi.py         <- two Zouhar reference values, NO external data
        │    ├─ parity.py        ratio of means
-       │    └─ gini.py          ascending sort; property tests (U3 may drop ref rows)
+       │    └─ gini.py          ascending sort; property tests (U3 rows dropped)
        │
        ├─ Tier 1 word-level           <- needs segmenter extras
        │    ├─ segmenters/       one adapter per Segmenter member, model version pinned
@@ -103,9 +103,9 @@ are never cut. The package ships at M1 (**Fri 18 Sep 2026**), before the paper a
 
 ## Not yet written
 
-- `.github/workflows/` — the matrix is 3.10–3.13 × {ubuntu, macos, windows}, plus the two load-bearing
-  jobs: `glotscope verify` against a committed `result.json`, and the nightly leaderboard re-run that
-  fails if any published number moves.
+- The two load-bearing CI jobs are not yet written: `glotscope verify` against a committed
+  `result.json`, and the nightly leaderboard re-run that fails if any published number moves. The
+  3.10–3.13 × {ubuntu, macos, windows} quality matrix is implemented and green.
 - `leaderboard.yaml`, `results/` — M3.
 - Tier metric packages (`tier0/`, `tier1/`, `tier2/`) — deliberately not stubbed. The contracts are
   pinned by the `Tier1Report` methods and the `aggregate` boundary; empty files would be churn.
