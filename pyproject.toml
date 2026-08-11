@@ -31,8 +31,13 @@ dependencies = [
     "tokenizers>=0.23",
     "tiktoken>=0.7",
     "safetensors>=0.4",
-    "numpy>=1.24",
+    "numpy>=1.24,<2.5",
 ]
+
+[project.urls]
+Homepage = "https://pypi.org/project/glotscope/"
+Repository = "https://github.com/ChenkaiHong/glotscope"
+Issues = "https://github.com/ChenkaiHong/glotscope/issues"
 
 # All segmenters are optional (PRD §10.3). MeCab needs a native build and a
 # dictionary; PyICU needs system ICU. G1 promises green Windows CI for the core
@@ -54,6 +59,7 @@ dev = [
     "hypothesis>=6.100",
     "mypy>=1.11",
     "ruff>=0.6",
+    "twine==7.0.0",
 ]
 
 [project.scripts]

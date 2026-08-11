@@ -1,7 +1,8 @@
 # Build order and open questions
 
-Sequencing only. Formulas, decisions and rationale live in `glotscope-PRD.md` and are not restated
-here — two copies of a normative spec is the failure mode §12.1 and `divergences.md` exist to prevent.
+Sequencing only. The normative internal specification is intentionally not distributed; formulas,
+decisions and rationale are not restated here — two copies of a normative spec is the failure mode
+§12.1 and `divergences.md` exist to prevent.
 
 ## Blocking unknowns
 
@@ -77,10 +78,9 @@ U1..U5 (blocking unknowns)
             └─ detect.py          both indicators + Spearman agreement
 ```
 
-## Start here
+## Completed foundation
 
-Ranked by value per unit of blocked-ness. The first three need no network, no corpus, no credentials,
-and no unknown resolved:
+Completed in the original value-per-unit-of-blocked-ness order:
 
 1. **The two Zouhar Rényi reference values** (§12.1, tolerance 1e-9). The cheapest reference test in
    the document and the only place a published number is reproducible from a literal string. Two
@@ -94,8 +94,7 @@ and no unknown resolved:
 4. **`Gini([1,2,3,4,5]) == 4/15`** as a hard-coded value, plus the `in [0,1]` range check. The range
    check is the one that catches a descending sort; order-invariance does not.
 
-Then reserve the PyPI name if it is not already done — `tokscope` was taken in July 2026, and name
-reservation is a 15-minute task with a hard deadline attached.
+The PyPI name was reserved on 10 August 2026.
 
 ## Cut order under schedule pressure
 
@@ -104,10 +103,6 @@ are never cut. The package ships at M1 (**Fri 18 Sep 2026**), before the paper a
 
 ## Not yet written
 
-- `tests/` — empty. The four tests above are the first ones.
-- `docs/divergences.md` — required before M3 can exit. Already has three known entries: the Nayeem
-  fertility ranges (no segmenter stated in source), the Turkish full-alignment row (U2), and
-  `OUT_OF_SCOPE` where the reference implementation publishes a number.
 - `.github/workflows/` — the matrix is 3.10–3.13 × {ubuntu, macos, windows}, plus the two load-bearing
   jobs: `glotscope verify` against a committed `result.json`, and the nightly leaderboard re-run that
   fails if any published number moves.

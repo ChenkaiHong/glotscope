@@ -10,9 +10,10 @@ It is the first package to span corpus metrics *and* model-weight metrics. Exist
 suites stop at the tokenizer; the existing glitch-token detector starts at the weights and is not
 installable.
 
-> **Status: 0.0.0 — name reservation only.** Nothing is implemented yet. The full specification lives
-> in [`glotscope-PRD.md`](glotscope-PRD.md); the build order and open questions are in
-> [`docs/build-order.md`](docs/build-order.md). First functional release (Tier 0 + Tier 1) is v0.1.0.
+> **Status: 0.0.0 — pre-release foundation.** Contract types, initial metric primitives, and tests are
+> implemented; CLI metric execution is not. See the
+> [`build order and open questions`](docs/build-order.md). First functional release (Tier 0 + Tier 1)
+> is v0.1.0.
 
 ## What these metrics do and do not tell you
 

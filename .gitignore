@@ -16,6 +16,9 @@ venv/
 coverage.xml
 htmlcov/
 
+# OS metadata
+.DS_Store
+
 # Rust (v2)
 target/
 
@@ -27,6 +30,7 @@ glotscope-PRD.md
 
 # Local working log — narrative record, deliberately not released (see HISTORY.md header)
 HISTORY.md
+PROGRESS.md
 
 # Downloaded corpora and checkpoints — never committed (D12).
 # Recipes and checksums are committed; the artifacts are not.

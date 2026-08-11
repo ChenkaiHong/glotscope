@@ -117,8 +117,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     milestone = _MILESTONES[args.command]
     print(
-        f"glotscope {args.command}: not implemented in this release. "
-        f"Scheduled for {milestone}.",
+        f"glotscope {args.command}: not implemented in this release. Scheduled for {milestone}.",
         file=sys.stderr,
     )
     return _NOT_YET
