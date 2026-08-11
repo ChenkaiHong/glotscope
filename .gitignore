@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+coverage.xml
+htmlcov/
+
+# Rust (v2)
+target/
+
+# Internal working documents. Never committed, never distributed.
+# The PRD is the most valuable file here and the least publishable: it is a personal
+# build spec, and this repo is intended to become public (M0). Keeping it untracked is
+# what stops it reaching GitHub, where history is effectively permanent.
+glotscope-PRD.md
+
+# Local working log — narrative record, deliberately not released (see HISTORY.md header)
+HISTORY.md
+
+# Downloaded corpora and checkpoints — never committed (D12).
+# Recipes and checksums are committed; the artifacts are not.
+data/
+corpora/
+*.safetensors

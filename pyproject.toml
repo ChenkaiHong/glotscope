@@ -1,0 +1,143 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+# Layout note (PRD §13): the package lives at python/glotscope/ because that is
+# the maturin mixed layout v2 commits to (`python-source = "python"`,
+# `module-name = "glotscope._core"`). Adopting it now means the v2 switch is a
+# build-backend change, not a directory move.
+
+[project]
+name = "glotscope"
+version = "0.0.0"
+description = "Multilingual tokenizer diagnostics with integrated under-trained-token detection"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Kai Hong" }]
+keywords = ["tokenizer", "multilingual", "nlp", "evaluation", "tokenization"]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+dependencies = [
+    "tokenizers>=0.23",
+    "tiktoken>=0.7",
+    "safetensors>=0.4",
+    "numpy>=1.24",
+]
+
+# All segmenters are optional (PRD §10.3). MeCab needs a native build and a
+# dictionary; PyICU needs system ICU. G1 promises green Windows CI for the core
+# install only — segmenter-dependent tests skip-with-message.
+[project.optional-dependencies]
+segmenters = [
+    "stanza>=1.10",
+    "ufal.udpipe>=1.3",
+    "fugashi>=1.3",
+    "unidic-lite>=1.0",
+    "jieba>=0.42",
+    "pythainlp>=5.0",
+    "khmer-nltk>=1.6",
+    "PyICU>=2.13",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "hypothesis>=6.100",
+    "mypy>=1.11",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+glotscope = "glotscope.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["python/glotscope"]
+
+# The sdist ships the package, its tests and its public docs — nothing else.
+# glotscope-PRD.md and HISTORY.md are internal working documents and stay out of every
+# distribution. A published sdist cannot be retracted, so `include` is an allowlist and
+# `exclude` is a second guard. Re-run a leak check after any packaging change.
+[tool.hatch.build.targets.sdist]
+include = ["python/", "tests/", "docs/", "LICENSE", "README.md"]
+exclude = ["glotscope-PRD.md", "HISTORY.md"]
+
+# ---------------------------------------------------------------------------
+# Tooling. Pinned by PRD §12.4 — ruff, not black/flake8/isort; mypy --strict.
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["python", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle / pyflakes
+    "I",             # isort
+    "N",             # pep8-naming
+    "UP",            # pyupgrade
+    "B",             # bugbear
+    "SIM",           # simplify
+    "RUF",           # ruff-specific
+    "PTH",           # use pathlib
+    "RET",           # return simplification
+    "C4",            # comprehensions
+]
+ignore = [
+    "E501",  # line length is enforced by the formatter
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["python/glotscope", "tests"]
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+
+[[tool.mypy.overrides]]
+module = [
+    "tokenizers.*",
+    "tiktoken.*",
+    "safetensors.*",
+    "stanza.*",
+    "jieba.*",
+    "pythainlp.*",
+    "fugashi.*",
+    "icu.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "--strict-markers --strict-config"
+markers = [
+    "reference: reproduces a published reference value (PRD §12.1)",
+    "property: Hypothesis property test (PRD §12.2)",
+    "segmenter: requires an optional segmenter extra; skips when unavailable",
+    "gated: requires HF_TOKEN or manual terms acceptance; skips when unavailable",
+    "network: downloads a corpus or checkpoint",
+]
+
+# Coverage gate is 85% line coverage (G1). Kept here so CI and local runs agree.
+[tool.coverage.run]
+source = ["python/glotscope"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+]
