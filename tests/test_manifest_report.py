@@ -234,22 +234,25 @@ def test_tier1_fertility_requires_a_segmenter_and_omits_uncomputed_languages() -
     assert with_segmenter.fertility == {"eng": 1.25}
 
 
-def test_tier1_and_report_unimplemented_contracts_raise() -> None:
+def test_report_reconstruction_is_still_unimplemented() -> None:
+    # Tier0Report.to_dict is deliberately lossy: it omits the partial-UTF-8,
+    # unreachable and special-token id lists, which run to thousands of entries
+    # on a real vocabulary. Rebuilding a Report from a document is therefore not
+    # possible without a schema change, and pretending otherwise would hand back
+    # an object whose Stage-1 exclusion set is silently empty.
+    with pytest.raises(NotImplementedError):
+        Report.from_json("unused.json")
+
+
+def test_a_report_serializes_every_tier_that_ran() -> None:
     tier1 = Tier1Report(per_language={}, corpus_level=CorpusMetrics(), segmenter=Segmenter.STANZA)
     report = Report(tier0=_tier0(), manifest=_manifest(), tier1=tier1)
 
-    with pytest.raises(NotImplementedError):
-        tier1.parity("eng")
-    with pytest.raises(NotImplementedError):
-        tier1.gini()
-    with pytest.raises(NotImplementedError):
-        tier1.renyi_efficiency(2.5)
-    with pytest.raises(NotImplementedError):
-        tier1.to_dict()
-    with pytest.raises(NotImplementedError):
-        Report.from_json("unused.json")
-    with pytest.raises(NotImplementedError):
-        report.to_dict()
+    document = report.to_dict()
+
+    assert document["tier1"]["segmenter"] == "stanza"
+    assert document["tier0"]["vocab_size"] == 10
+    assert "tier2" not in document
 
 
 def test_report_serializes_tier0_tier2_warnings_and_deterministic_json(tmp_path: Path) -> None:

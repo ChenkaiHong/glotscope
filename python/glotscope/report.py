@@ -17,12 +17,16 @@ Two structural decisions here encode PRD traps that comments alone would not:
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
+from glotscope.aggregate import DocumentStats
 from glotscope.enums import (
+    Capability,
     Confidence,
     Indicator,
     RenyiNormalizer,
@@ -30,8 +34,11 @@ from glotscope.enums import (
     TokenClass,
     TokenizerFamily,
 )
-from glotscope.errors import SegmenterRequiredError
+from glotscope.errors import CapabilityError, SegmenterRequiredError
 from glotscope.manifest import Manifest, canonical_json
+from glotscope.metrics import gini as _gini
+from glotscope.metrics import parity as _parity
+from glotscope.metrics import renyi_efficiency_from_counts as _renyi_from_counts
 from glotscope.results import (
     CorpusMetrics,
     GiniResult,
@@ -47,6 +54,11 @@ __all__ = [
     "Tier2Report",
     "TokenCandidate",
 ]
+
+_NO_STATS: Mapping[str, DocumentStats] = MappingProxyType({})
+"""Shared empty default. A read-only mapping rather than a fresh ``dict`` per
+instance: these reports are frozen, and a mutable default would be the one way
+to change a result after it was produced."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +129,18 @@ class Tier1Report:
 
     warnings: tuple[str, ...] = ()
 
+    document_stats: Mapping[str, DocumentStats] = _NO_STATS
+    """Folded statistics per language, kept so the corpus-level metrics can be
+    *computed* rather than looked up. ``alpha`` is chosen at call time in §8.1,
+    and a report storing only a finished Renyi number could not answer a second
+    alpha without re-encoding the corpus."""
+
+    corpus_id: str = ""
+    capabilities: frozenset[Capability] = frozenset()
+    """What the corpus declared it supports. Carried here because gating is on
+    capability, never on corpus identity (D5), and the refusal has to be able to
+    name what was missing."""
+
     @property
     def fertility(self) -> Mapping[str, float]:
         """Per-language fertility (PRD §7.1).
@@ -138,29 +162,121 @@ class Tier1Report:
     def parity(self, reference: str) -> ParityResult:
         """Corpus-level parity against ``reference`` (PRD §7.3).
 
+        Computed as a **ratio of means**, not a mean of per-sentence ratios (D7):
+        only the ratio of means maps to what an API actually bills.
+
         Raises:
             CapabilityError: if the corpus does not declare ``parallel``.
+            ValueError: if the report carries no folded statistics.
         """
-        raise NotImplementedError
+        if Capability.PARALLEL not in self.capabilities:
+            raise CapabilityError(
+                "parity",
+                Capability.PARALLEL.value,
+                self.corpus_id or "<unidentified corpus>",
+                (capability.value for capability in self.capabilities),
+            )
+        stats = self._require_stats("parity")
+        token_counts = {
+            language: language_stats.per_document_tokens
+            for language, language_stats in stats.items()
+        }
+        return _parity(token_counts, reference=reference)
 
     def gini(self) -> GiniResult:
-        """Cross-lingual cost inequality over the evaluated language set (§7.4)."""
-        raise NotImplementedError
+        """Cross-lingual cost inequality over the evaluated language set (§7.4).
+
+        The cost unit is tokens per aligned line, so the comparison is only
+        meaningful across a fixed language set — a Gini computed over a different
+        set is a different number and :class:`GiniResult` records the set for
+        exactly that reason.
+        """
+        stats = self._require_stats("gini")
+        costs = {
+            language: language_stats.total_tokens / language_stats.n_documents
+            for language, language_stats in stats.items()
+            if language_stats.n_documents
+        }
+        if not costs:
+            raise ValueError("gini requires at least one language with at least one line")
+        return _gini(costs)
 
     def renyi_efficiency(
         self,
         alpha: float,
         normalizer: RenyiNormalizer = RenyiNormalizer.OBSERVED,
+        nominal_vocab_size: int | None = None,
     ) -> RenyiResult:
         """Renyi efficiency at an explicit ``alpha`` (PRD §7.5, D17).
 
         ``alpha`` has no default on purpose: calling the reference implementation
         without specifying it silently uses 3.0 and reproduces nobody.
+
+        Computed from the stored type-count distributions, merged across the
+        evaluated languages, so a second ``alpha`` costs a fold rather than a
+        re-encode. Ship the result as supplementary, never headline (D8): two
+        published constructions raise Renyi efficiency while lowering BLEU.
         """
-        raise NotImplementedError
+        stats = self._require_stats("renyi_efficiency")
+        merged: Counter[int] = Counter()
+        for language_stats in stats.values():
+            merged.update(language_stats.type_counts)
+        return _renyi_from_counts(
+            merged,
+            alpha=alpha,
+            normalizer=normalizer,
+            nominal_vocab_size=nominal_vocab_size,
+        )
+
+    def _require_stats(self, metric: str) -> Mapping[str, DocumentStats]:
+        if not self.document_stats:
+            raise ValueError(
+                f"{metric!r} needs the folded corpus statistics, and this report "
+                f"carries no stored document statistics"
+            )
+        return self.document_stats
 
     def to_dict(self) -> dict[str, Any]:
-        raise NotImplementedError
+        """Assemble the §9 ``tier1`` block.
+
+        A metric that was not computed is *absent*, never zero: ``None`` means
+        "not computed", and a zero would tabulate beside real measurements as
+        though it were one.
+        """
+        per_language: dict[str, Any] = {}
+        for language, language_metrics in self.per_language.items():
+            compression = language_metrics.compression
+            entry: dict[str, Any] = {
+                "cpt": compression.cpt,
+                "bpt": compression.bpt,
+                "ctc": compression.ctc,
+                "compression_rate": compression.compression_rate,
+                "compression_rate_unit": compression.compression_rate_unit,
+            }
+            if language_metrics.fertility is not None:
+                entry["fertility"] = language_metrics.fertility.fertility
+            if language_metrics.strr is not None:
+                entry["strr_bare"] = language_metrics.strr.bare
+                entry["strr_leading_space"] = language_metrics.strr.leading_space
+            if language_metrics.parity_vs_reference is not None:
+                entry["parity_vs_reference"] = language_metrics.parity_vs_reference
+            if language_metrics.roundtrip_rate is not None:
+                entry["roundtrip_rate"] = language_metrics.roundtrip_rate
+            per_language[language] = entry
+
+        corpus_level: dict[str, Any] = {}
+        if self.corpus_level.gini is not None:
+            corpus_level["gini"] = self.corpus_level.gini.value
+        if self.corpus_level.renyi is not None:
+            corpus_level["renyi_efficiency"] = self.corpus_level.renyi.value
+            corpus_level["renyi_alpha"] = self.corpus_level.renyi.alpha
+            corpus_level["renyi_normalizer"] = self.corpus_level.renyi.normalizer.value
+
+        return {
+            "per_language": per_language,
+            "corpus_level": corpus_level,
+            "segmenter": self.segmenter.value if self.segmenter is not None else None,
+        }
 
 
 @dataclass(frozen=True, slots=True)
