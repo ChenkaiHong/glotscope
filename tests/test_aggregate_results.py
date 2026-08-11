@@ -2,13 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from glotscope.aggregate import (
-    BoundaryCounts,
-    aggregate_documents,
-    aggregate_words,
-    align_boundaries,
-    attribute_scripts,
-)
+from glotscope.aggregate import BoundaryCounts
 from glotscope.enums import RenyiNormalizer, TypologicalScope
 from glotscope.errors import IncomparableError
 from glotscope.results import (
@@ -28,17 +22,6 @@ def test_boundary_counts_calculates_metrics_and_handles_empty_denominators() -> 
     assert gathered.recall == 1.0
     assert gathered.f1 == pytest.approx(2 / 9)
     assert (empty.precision, empty.recall, empty.f1) == (0.0, 0.0, 0.0)
-
-
-def test_aggregate_boundaries_are_explicitly_unimplemented() -> None:
-    with pytest.raises(NotImplementedError):
-        aggregate_documents([[1], []], [1, 0], [1, 0])
-    with pytest.raises(NotImplementedError):
-        aggregate_words([[1], [], [2, 3]])
-    with pytest.raises(NotImplementedError):
-        attribute_scripts([1, 2], [215, 220])
-    with pytest.raises(NotImplementedError):
-        align_boundaries([[1, 2]], [[1]])
 
 
 def test_comparability_accepts_matching_keys_and_names_first_difference() -> None:

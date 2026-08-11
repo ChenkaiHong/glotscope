@@ -174,7 +174,24 @@ def aggregate_documents(
             requires equal line counts across languages for the
             ratio-of-means-equals-ratio-of-totals identity to hold.
     """
-    raise NotImplementedError
+    if not len(encodings) == len(char_lengths) == len(byte_lengths):
+        raise ValueError(
+            f"encodings, char_lengths and byte_lengths must be of equal length: "
+            f"got {len(encodings)}, {len(char_lengths)}, {len(byte_lengths)}"
+        )
+    if any(length < 0 for length in (*char_lengths, *byte_lengths)):
+        raise ValueError("char_lengths and byte_lengths cannot be negative")
+
+    per_document_tokens = tuple(len(encoding) for encoding in encodings)
+    return DocumentStats(
+        n_documents=len(encodings),
+        total_tokens=sum(per_document_tokens),
+        total_chars=sum(char_lengths),
+        total_bytes=sum(byte_lengths),
+        type_counts=_count_types(encodings),
+        per_document_tokens=per_document_tokens,
+        n_empty_documents=sum(1 for count in per_document_tokens if count == 0),
+    )
 
 
 def aggregate_words(encodings: Sequence[Sequence[int]]) -> WordStats:
@@ -185,7 +202,14 @@ def aggregate_words(encodings: Sequence[Sequence[int]]) -> WordStats:
     point and recorded in the manifest: it can move STRR by tens of points
     (§7.6), and the source paper does not specify it.
     """
-    raise NotImplementedError
+    token_counts = [len(encoding) for encoding in encodings]
+    return WordStats(
+        n_words=len(token_counts),
+        total_tokens=sum(token_counts),
+        n_continued=sum(1 for count in token_counts if count >= 2),
+        n_single_token=sum(1 for count in token_counts if count == 1),
+        n_zero_length=sum(1 for count in token_counts if count == 0),
+    )
 
 
 def attribute_scripts(
@@ -215,8 +239,19 @@ def attribute_scripts(
         denominator = all script-attributed vocabulary entries, independent of
         corpus emission — which is what decouples it from ``parity_l``'s
         numerator.
+
+    Raises:
+        ValueError: if the two sequences have differing lengths. The pairing is
+            positional, so a length mismatch means some entry is being counted
+            under another entry's script.
     """
-    raise NotImplementedError
+    if len(token_ids) != len(script_ids):
+        raise ValueError(
+            f"token_ids and script_ids must be of equal length: "
+            f"got {len(token_ids)} and {len(script_ids)}"
+        )
+    counter: Counter[int] = Counter(script_ids)
+    return MappingProxyType(dict(counter))
 
 
 def align_boundaries(
@@ -242,7 +277,31 @@ def align_boundaries(
     Raises:
         ValueError: if ``predicted`` and ``gold`` have differing lengths.
     """
-    raise NotImplementedError
+    if len(predicted) != len(gold):
+        raise ValueError(
+            f"predicted and gold must be of equal length: got {len(predicted)} and {len(gold)}"
+        )
+
+    true_positive = false_positive = false_negative = 0
+    for predicted_word, gold_word in zip(predicted, gold, strict=True):
+        # Sets, not lists: a boundary is a position, so a repeated offset is the
+        # same boundary. Counting it twice would let a tokenizer inflate its own
+        # true-positive count by emitting duplicates.
+        predicted_boundaries = set(predicted_word)
+        gold_boundaries = set(gold_word)
+        true_positive += len(predicted_boundaries & gold_boundaries)
+        false_positive += len(predicted_boundaries - gold_boundaries)
+        false_negative += len(gold_boundaries - predicted_boundaries)
+
+    # Micro-aggregation: counts are summed across the batch and the ratio taken
+    # once, rather than averaging per-word F1. Per-word averaging would weight a
+    # one-morpheme word as heavily as a six-morpheme one, which is exactly the
+    # comparison agglutinative languages exist to break.
+    return BoundaryCounts(
+        true_positive=true_positive,
+        false_positive=false_positive,
+        false_negative=false_negative,
+    )
 
 
 def _count_types(encodings: Sequence[Sequence[int]]) -> Mapping[int, int]:
