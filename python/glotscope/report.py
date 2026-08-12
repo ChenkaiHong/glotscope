@@ -35,7 +35,7 @@ from glotscope.enums import (
     TokenizerFamily,
 )
 from glotscope.errors import CapabilityError, SegmenterRequiredError
-from glotscope.manifest import Manifest, canonical_json
+from glotscope.manifest import CorpusManifest, Manifest, ParameterManifest, canonical_json
 from glotscope.metrics import gini as _gini
 from glotscope.metrics import parity as _parity
 from glotscope.metrics import renyi_efficiency_from_counts as _renyi_from_counts
@@ -135,11 +135,41 @@ class Tier1Report:
     and a report storing only a finished Renyi number could not answer a second
     alpha without re-encoding the corpus."""
 
-    corpus_id: str = ""
-    capabilities: frozenset[Capability] = frozenset()
-    """What the corpus declared it supports. Carried here because gating is on
-    capability, never on corpus identity (D5), and the refusal has to be able to
-    name what was missing."""
+    corpus: CorpusManifest | None = None
+    """The §9 corpus block, which is also what the capability gate reads. One
+    field rather than a loose identifier beside a loose capability set: gating is
+    on capability and never on corpus identity (D5), and a report that can name
+    what was missing must have been told by the corpus itself."""
+
+    parameters: ParameterManifest | None = None
+    """Every contested parameter the run was performed under (§9). Carried on the
+    report because these are properties of the *analysis*, and a caller
+    assembling a :class:`~glotscope.manifest.Manifest` from a report should not
+    have to restate them — a second copy in user code is a second thing to drift.
+
+    Renyi's alpha and normalizer are absent here on purpose: they are chosen per
+    call in §8.1, and :class:`~glotscope.results.RenyiResult` carries the ones it
+    was computed under."""
+
+    def __post_init__(self) -> None:
+        parameters = self.parameters
+        if parameters is not None and parameters.segmenter is not self.segmenter:
+            raise ValueError(
+                f"the report's segmenter ({self.segmenter}) and its recorded "
+                f"parameters ({parameters.segmenter}) disagree. The segmenter "
+                f"appears twice by necessity — here because it gates the fertility "
+                f"refusal, and in the parameter block because that is what gets "
+                f"published — so disagreement is a construction error rather than "
+                f"something a reader has to notice."
+            )
+
+    @property
+    def corpus_id(self) -> str:
+        return self.corpus.id if self.corpus is not None else ""
+
+    @property
+    def capabilities(self) -> frozenset[Capability]:
+        return self.corpus.capabilities if self.corpus is not None else frozenset()
 
     @property
     def fertility(self) -> Mapping[str, float]:

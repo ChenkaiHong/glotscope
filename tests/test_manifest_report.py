@@ -27,9 +27,26 @@ from glotscope.manifest import (
     WarningLog,
     WeightsManifest,
     canonical_json,
+    environment,
 )
 from glotscope.report import Report, Tier0Report, Tier1Report, Tier2Report, TokenCandidate
 from glotscope.results import CompressionResult, CorpusMetrics, FertilityResult, LanguageMetrics
+
+
+def test_the_environment_is_captured_without_machine_specific_detail() -> None:
+    import platform as platform_module
+
+    captured = environment()
+
+    # A family string, not platform.platform(): the latter embeds kernel build
+    # numbers, so two machines producing identical numbers would produce
+    # different manifests and G4's bit-identical assertion would never be green.
+    assert captured.platform == captured.platform.lower()
+    assert " " not in captured.platform
+    assert captured.python == platform_module.python_version()
+    assert captured.tokenizers
+    # Nothing here may vary between two calls in one process.
+    assert captured == environment()
 
 
 def _manifest(*, with_optional_tiers: bool = False) -> Manifest:

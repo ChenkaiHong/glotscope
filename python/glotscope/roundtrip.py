@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-__all__ = ["roundtrip_rate"]
+__all__ = ["roundtrip_rate", "roundtrip_rate_from_ids"]
 
 
 def roundtrip_rate(
@@ -49,10 +49,39 @@ def roundtrip_rate(
         raise ValueError("round-trip losslessness requires at least one document")
 
     encodings = backend.encode_batch(list(documents), add_special_tokens=add_special_tokens)
-    decoded = backend.decode_batch(
-        [encoding.ids for encoding in encodings],
-        skip_special_tokens=False,
-    )
+    return roundtrip_rate_from_ids(backend, documents, [encoding.ids for encoding in encodings])
+
+
+def roundtrip_rate_from_ids(
+    backend: Any,
+    documents: Sequence[str],
+    token_ids: Sequence[Sequence[int]],
+) -> float:
+    """As :func:`roundtrip_rate`, for a caller that already encoded the batch.
+
+    Tier 1 encodes the corpus once for the aggregation fold, and re-encoding it
+    here would double the dominant cost of an ``analyze()`` run for a measure
+    that only needs the decode half.
+
+    ``documents`` must be the exact text the ids were produced from — including
+    whatever normalization the caller applied. Comparing a normalized encoding
+    against unnormalized source would report a round-trip failure caused by the
+    pipeline rather than by the tokenizer.
+
+    Raises:
+        ValueError: if ``documents`` is empty, or if the two sequences differ in
+            length. The pairing is positional, so a mismatch compares one
+            document against another document's decoding.
+    """
+    if not documents:
+        raise ValueError("round-trip losslessness requires at least one document")
+    if len(documents) != len(token_ids):
+        raise ValueError(
+            f"documents and token_ids must be of equal length: "
+            f"got {len(documents)} and {len(token_ids)}"
+        )
+
+    decoded = backend.decode_batch([list(ids) for ids in token_ids], skip_special_tokens=False)
     survived = sum(
         1 for original, restored in zip(documents, decoded, strict=True) if original == restored
     )

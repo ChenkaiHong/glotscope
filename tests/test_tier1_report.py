@@ -11,8 +11,9 @@ from __future__ import annotations
 import pytest
 
 from glotscope.aggregate import DocumentStats, aggregate_documents
-from glotscope.enums import Capability, RenyiNormalizer, Segmenter
+from glotscope.enums import Capability, Normalization, RenyiNormalizer, Segmenter
 from glotscope.errors import CapabilityError
+from glotscope.manifest import CorpusManifest, ParameterManifest
 from glotscope.metrics import renyi_efficiency
 from glotscope.report import Tier1Report
 from glotscope.results import (
@@ -28,6 +29,27 @@ from glotscope.results import (
 def _stats(encodings: list[list[int]]) -> DocumentStats:
     lengths = [len(encoding) for encoding in encodings]
     return aggregate_documents(encodings, char_lengths=lengths, byte_lengths=lengths)
+
+
+def _corpus(
+    *,
+    capabilities: frozenset[Capability] = frozenset({Capability.PARALLEL}),
+    corpus_id: str = "flores_plus",
+) -> CorpusManifest:
+    """The §9 corpus block, which is also what the capability gate reads.
+
+    One field rather than a loose ``corpus_id`` beside a loose capability set:
+    claiming a corpus is parallel now requires naming the corpus that said so.
+    """
+    return CorpusManifest(
+        id=corpus_id,
+        version="2024.08",
+        split="devtest",
+        languages=("eng_Latn", "hin_Deva"),
+        sha256="a" * 64,
+        capabilities=capabilities,
+        license="CC-BY-SA-4.0",
+    )
 
 
 def _report(
@@ -51,8 +73,7 @@ def _report(
         corpus_level=CorpusMetrics(),
         segmenter=None,
         document_stats=document_stats,
-        corpus_id=corpus_id,
-        capabilities=capabilities,
+        corpus=_corpus(capabilities=capabilities, corpus_id=corpus_id),
     )
 
 
@@ -199,6 +220,26 @@ def test_gini_refuses_a_language_set_with_no_aligned_lines() -> None:
 
     with pytest.raises(ValueError, match="at least one line"):
         report.gini()
+
+
+def test_a_report_refuses_parameters_that_disagree_with_its_segmenter() -> None:
+    # The segmenter appears twice by necessity: on the report because it is the
+    # enforcement point for the fertility refusal, and in the §9 parameter block
+    # because that is what gets published. Two copies of one decision drift, so
+    # disagreement is a construction error rather than something a reader has to
+    # notice.
+    with pytest.raises(ValueError, match="segmenter"):
+        Tier1Report(
+            per_language={},
+            corpus_level=CorpusMetrics(),
+            segmenter=None,
+            parameters=ParameterManifest(
+                leading_space=True,
+                normalization=Normalization.NFC,
+                add_special_tokens=False,
+                segmenter=Segmenter.STANZA,
+            ),
+        )
 
 
 def test_tier1_serialization_omits_a_segmenter_that_was_never_chosen() -> None:

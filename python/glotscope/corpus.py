@@ -21,6 +21,7 @@ from types import MappingProxyType
 
 from glotscope.enums import Capability
 from glotscope.errors import CapabilityError, CorpusIntegrityError, LicenseError
+from glotscope.manifest import CorpusManifest
 
 __all__ = [
     "FLORES_PLUS_VERSION",
@@ -311,6 +312,23 @@ class Corpus:
         return LoadedCorpus(
             corpus=replace(self, sha256=digest),
             lines=MappingProxyType(lines),
+        )
+
+    def to_manifest(self) -> CorpusManifest:
+        """The §9 corpus block for this resolved corpus.
+
+        Assembled here rather than by the caller so that ``sha256`` is whatever
+        :meth:`load` computed: a manifest naming a corpus it did not read would
+        pass every check while describing different bytes.
+        """
+        return CorpusManifest(
+            id=self.spec.id,
+            version=self.version,
+            split=self.split,
+            languages=self.languages,
+            sha256=self.sha256,
+            capabilities=self.spec.capabilities,
+            license=self.spec.license,
         )
 
     def _check_license(self, license_filter: str | None) -> None:

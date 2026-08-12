@@ -15,8 +15,10 @@ upstream release identifiers, not dates glotscope generates.
 from __future__ import annotations
 
 import json
+import platform as platform_module
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from importlib.metadata import version
 from typing import Any
 
 from glotscope.enums import (
@@ -38,6 +40,7 @@ __all__ = [
     "WarningLog",
     "WeightsManifest",
     "canonical_json",
+    "environment",
 ]
 
 SCHEMA_VERSION = "1.0"
@@ -214,6 +217,22 @@ class EnvironmentManifest:
             "tokenizers": self.tokenizers,
             "platform": self.platform,
         }
+
+
+def environment() -> EnvironmentManifest:
+    """Capture the current environment (PRD §9).
+
+    ``platform`` is assembled from :func:`platform.system` and
+    :func:`platform.machine` rather than taken from :func:`platform.platform`,
+    which embeds kernel build numbers. Two machines that produce identical
+    numbers must produce identical manifests, or G4's bit-identical assertion is
+    permanently red for a reason that has nothing to do with the numbers.
+    """
+    return EnvironmentManifest(
+        python=platform_module.python_version(),
+        tokenizers=version("tokenizers"),
+        platform=f"{platform_module.system()}-{platform_module.machine()}".lower(),
+    )
 
 
 @dataclass(frozen=True, slots=True)
