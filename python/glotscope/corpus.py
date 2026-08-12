@@ -81,6 +81,15 @@ class CorpusSpec:
     for: the library ships no corpora (D12), so a row without a recipe is a dead
     end rather than a citation."""
 
+    default_version: str | None = None
+    """The release this library pins, or ``None`` where no upstream identifier
+    describes what a run actually evaluates. FineWeb2 is the ``None`` case: it is
+    far larger than any run needs, so what gets evaluated is a *sample*, and a
+    default would put an unverifiable string in a manifest field other people are
+    meant to cite. Callers must name that one themselves."""
+
+    default_split: str = "train"
+
 
 REGISTRY: dict[str, CorpusSpec] = {
     "flores_plus": CorpusSpec(
@@ -93,6 +102,8 @@ REGISTRY: dict[str, CorpusSpec] = {
         recipe="Hugging Face dataset 'openlanguagedata/flores_plus', pinned by "
         "revision. Gated: needs HF_TOKEN or accepted terms. Write one file per "
         "language as <root>/flores_plus/<version>/<split>/<lang>.txt.",
+        default_version=FLORES_PLUS_VERSION,
+        default_split="devtest",
     ),
     "europarl": CorpusSpec(
         id="europarl",
@@ -103,6 +114,7 @@ REGISTRY: dict[str, CorpusSpec] = {
         "for stable statistics.",
         recipe="Release v7 from statmt.org/europarl. Research use only, so it is "
         "excluded by --license-filter=commercial.",
+        default_version="v7",
     ),
     "fineweb2": CorpusSpec(
         id="fineweb2",
@@ -128,6 +140,7 @@ REGISTRY: dict[str, CorpusSpec] = {
         recipe="UD 2.18 release archive from the LINDAT repository. Check each "
         "treebank against data/ud-license-audit.json before use: 31 are "
         "noncommercial and 54 need manual review.",
+        default_version=UD_VERSION,
     ),
     "morphynet": CorpusSpec(
         id="morphynet",
@@ -191,8 +204,8 @@ class Corpus:
         cls,
         languages: Sequence[str],
         *,
-        split: str = "devtest",
-        version: str = FLORES_PLUS_VERSION,
+        split: str | None = None,
+        version: str | None = None,
         sha256: str = "",
     ) -> Corpus:
         """The primary parallel corpus (PRD §10.1).
@@ -205,9 +218,7 @@ class Corpus:
         ``sha256`` is empty on a first run and filled by :meth:`load`. Pass the
         recorded digest to assert that a later run reads the same bytes.
         """
-        return cls.from_registry(
-            "flores_plus", languages, split=split, version=version, sha256=sha256
-        )
+        return cls.resolve("flores_plus", languages, split=split, version=version, sha256=sha256)
 
     @classmethod
     def fineweb2(
@@ -215,7 +226,7 @@ class Corpus:
         languages: Sequence[str],
         *,
         version: str,
-        split: str = "train",
+        split: str | None = None,
         sha256: str = "",
     ) -> Corpus:
         """Monolingual corpus for compression and Renyi (PRD §10.1).
@@ -228,15 +239,15 @@ class Corpus:
         release tag describes it. Inventing one would put an unverifiable string
         in a manifest field other people are meant to cite.
         """
-        return cls.from_registry("fineweb2", languages, split=split, version=version, sha256=sha256)
+        return cls.resolve("fineweb2", languages, split=split, version=version, sha256=sha256)
 
     @classmethod
     def universal_dependencies(
         cls,
         treebanks: Sequence[str],
         *,
-        version: str = UD_VERSION,
-        split: str = "train",
+        version: str | None = None,
+        split: str | None = None,
         sha256: str = "",
     ) -> Corpus:
         """UD treebanks, which carry both gold segmentation and morphology.
@@ -245,7 +256,7 @@ class Corpus:
         treebanks disagree among themselves — Kaist segments morphologically, GSD
         by eojeol — so "UD" is not a single convention even within gold data.
         """
-        return cls.from_registry(
+        return cls.resolve(
             "universal_dependencies", treebanks, split=split, version=version, sha256=sha256
         )
 
@@ -352,17 +363,50 @@ class Corpus:
         version: str,
         sha256: str,
     ) -> Corpus:
-        """Build a corpus from a registry entry, validating the id."""
+        """Build a corpus from a registry entry with both pins stated explicitly."""
+        return cls.resolve(corpus_id, languages, split=split, version=version, sha256=sha256)
+
+    @classmethod
+    def resolve(
+        cls,
+        corpus_id: str,
+        languages: Iterable[str],
+        *,
+        split: str | None = None,
+        version: str | None = None,
+        sha256: str = "",
+    ) -> Corpus:
+        """Build a corpus, filling ``version`` and ``split`` from the registry.
+
+        The single place those defaults live. A second copy — in the CLI, say —
+        would be a second thing to drift, and the value it carries lands in a
+        manifest field other people cite.
+
+        Raises:
+            KeyError: if the corpus is not registered.
+            ValueError: if the entry pins no release and none was given. That is
+                FineWeb2, where what gets evaluated is a sample no upstream tag
+                describes; inventing one would be worse than asking.
+        """
         if corpus_id not in REGISTRY:
             raise KeyError(
                 f"unknown corpus {corpus_id!r}; known: {sorted(REGISTRY)}. "
                 f"Add a CorpusSpec with explicit capabilities and an SPDX license "
                 f"rather than passing an unregistered corpus."
             )
+        spec = REGISTRY[corpus_id]
+        resolved_version = version if version is not None else spec.default_version
+        if resolved_version is None:
+            raise ValueError(
+                f"corpus {corpus_id!r} pins no release, so version has no default "
+                f"and must be given. What gets evaluated is a sample that no "
+                f"upstream tag describes, and a manufactured version string would "
+                f"be unverifiable in a field other people are meant to cite."
+            )
         return cls(
-            spec=REGISTRY[corpus_id],
+            spec=spec,
             languages=tuple(languages),
-            version=version,
-            split=split,
+            version=resolved_version,
+            split=split if split is not None else spec.default_split,
             sha256=sha256,
         )

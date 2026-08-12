@@ -64,6 +64,22 @@ def test_fineweb2_refuses_to_invent_a_version() -> None:
         Corpus.fineweb2(["eng_Latn"])  # type: ignore[call-arg]
 
 
+def test_resolving_a_corpus_that_pins_no_release_refuses_rather_than_defaults() -> None:
+    # Same rule as the keyword-only version on fineweb2(), enforced at the one
+    # place the defaults live: an entry with no pinned release has none to fall
+    # back to, and a manufactured string would be unverifiable in a manifest
+    # field other people are meant to cite.
+    with pytest.raises(ValueError, match="pins no release"):
+        Corpus.resolve("fineweb2", ["eng_Latn"])
+
+
+def test_resolving_fills_the_split_and_version_from_the_registry() -> None:
+    corpus = Corpus.resolve("flores_plus", ["eng_Latn"])
+
+    assert corpus.version == REGISTRY["flores_plus"].default_version
+    assert corpus.split == "devtest"
+
+
 def test_universal_dependencies_records_treebanks_not_language_codes() -> None:
     corpus = Corpus.universal_dependencies(["UD_Korean-Kaist", "UD_Korean-GSD"])
 
