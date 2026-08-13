@@ -10,23 +10,25 @@ from __future__ import annotations
 import hashlib
 import json
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal
 
 from tokenizers import Tokenizer as BackendTokenizer
 
-from glotscope.aggregate import DocumentStats, aggregate_documents
+from glotscope.aggregate import DocumentStats, aggregate_documents, aggregate_words
 from glotscope.compression import compression
 from glotscope.corpus import Corpus, LoadedCorpus
 from glotscope.enums import Algorithm, Capability, Normalization, Segmenter
 from glotscope.errors import TokenizerLoadError
+from glotscope.fertility import fertility
 from glotscope.lint import detect_algorithm, lint_backend
 from glotscope.manifest import ParameterManifest, TokenizerManifest
 from glotscope.report import Tier0Report, Tier1Report, Tier2Report
-from glotscope.results import CorpusMetrics, LanguageMetrics
+from glotscope.results import CorpusMetrics, FertilityResult, LanguageMetrics
 from glotscope.roundtrip import roundtrip_matches_from_ids
+from glotscope.segmenters import get_segmenter
 
 if TYPE_CHECKING:
     from glotscope.embeddings import Embeddings
@@ -103,31 +105,67 @@ def _require_loaded(corpus: LoadedCorpus | Corpus) -> LoadedCorpus:
     )
 
 
-def _reject_unrunnable_segmenter(segmenter: Segmenter | None, corpus: Corpus) -> None:
-    """Refuse a segmenter this build cannot honour (PRD §7.1, D6).
+def _check_segmenter_capability(segmenter: Segmenter | None, corpus: Corpus) -> None:
+    """Refuse ``UD_GOLD`` on a corpus without gold word boundaries (§7.1 rule 1).
 
-    The capability check comes first and is permanent: ``UD_GOLD`` against a
-    corpus without gold word boundaries is a
-    :class:`~glotscope.errors.CapabilityError` no matter what is implemented,
-    because applying "UD segmentation" to arbitrary text is a different
-    operation performed by a trained model with its own per-language accuracy
-    and its own version (§7.1 rule 1).
-
-    The refusal that follows is temporary and tracks the segmenter adapters,
-    which are packaged as optional extras and not yet written.
+    Permanent, and independent of what is implemented: UD supplies gold
+    boundaries only for sentences inside the treebanks, and applying "UD
+    segmentation" to arbitrary text is a different operation performed by a
+    trained model with its own per-language accuracy and its own version.
     """
-    if segmenter is None:
-        return
-    if segmenter.requires_gold_segmentation:
+    if segmenter is not None and segmenter.requires_gold_segmentation:
         corpus.require(Capability.WORD_SEGMENTATION, "fertility")
-    raise NotImplementedError(
-        f"the {segmenter.value!r} segmenter adapter is not implemented, so no "
-        f"word-level metric can run. Pass segmenter=None for the segmenter-free "
-        f"Tier 1 metrics. Accepting the argument and recording it anyway would "
-        f"put a claim in the manifest that nothing performed, and an empty "
-        f"fertility mapping would be the silently plausible wrong answer D6 "
-        f"exists to prevent."
+
+
+def _unk_token_id(backend: BackendTokenizer, spec: Mapping[str, Any]) -> int | None:
+    """The id of the ``[UNK]`` token, or ``None`` where the model has none.
+
+    Byte-level BPE has no UNK by construction — every byte is representable — so
+    ``None`` here means the >10% exclusion rule cannot fire, not that it passed.
+    """
+    unk_token = spec.get("model", {}).get("unk_token")
+    if not isinstance(unk_token, str):
+        return None
+    return backend.token_to_id(unk_token)
+
+
+def _unk_char_count(encodings: Sequence[Any], unk_id: int | None) -> int:
+    """Characters covered by ``[UNK]`` tokens across a batch (§7.1 rule 6).
+
+    Counted from the encoding's character offsets rather than by counting UNK
+    tokens: one UNK can stand for a whole run of unrepresentable text, and the
+    rule is stated over *characters* precisely because a token count would
+    understate how much of the language was lost.
+    """
+    if unk_id is None:
+        return 0
+    return sum(
+        end - start
+        for encoding in encodings
+        for token_id, (start, end) in zip(encoding.ids, encoding.offsets, strict=True)
+        if token_id == unk_id
     )
+
+
+def _word_encodings(
+    backend: BackendTokenizer,
+    words: Sequence[str],
+    *,
+    leading_space: bool,
+    add_special_tokens: bool,
+) -> list[list[int]]:
+    """Encode each word on its own, applying the leading-space convention.
+
+    ``tau("the")`` and ``tau(" the")`` differ for byte-level BPE, often by a
+    whole token, so the convention is applied here — once, visibly — and
+    recorded in the manifest rather than left to whichever call site got there
+    first (§7.1 rule 5).
+    """
+    texts = [f" {word}" if leading_space else word for word in words]
+    return [
+        encoding.ids
+        for encoding in backend.encode_batch(texts, add_special_tokens=add_special_tokens)
+    ]
 
 
 class Tokenizer:
@@ -358,7 +396,7 @@ class Tokenizer:
         """
         normalization = Normalization(normalization)
         loaded = _require_loaded(corpus)
-        _reject_unrunnable_segmenter(segmenter, loaded.corpus)
+        _check_segmenter_capability(segmenter, loaded.corpus)
         if not loaded.lines:
             raise ValueError(
                 f"corpus {loaded.corpus.spec.id!r} resolved to no languages, so "
@@ -371,6 +409,7 @@ class Tokenizer:
 
         per_language: dict[str, LanguageMetrics] = {}
         document_stats: dict[str, DocumentStats] = {}
+        unk_id = _unk_token_id(self._backend, self._spec)
         for language, documents in loaded.lines.items():
             if not documents:
                 raise ValueError(
@@ -381,18 +420,16 @@ class Tokenizer:
             byte_lengths: list[int] = []
             is_blank: list[bool] = []
             roundtrip_matches = 0
+            unk_chars = 0
             for start in range(0, len(documents), _ANALYSIS_BATCH_SIZE):
                 texts = [
                     _normalized(document, normalization)
                     for document in documents[start : start + _ANALYSIS_BATCH_SIZE]
                 ]
                 chunk_bytes = [len(text.encode("utf-8")) for text in texts]
-                token_ids = [
-                    encoding.ids
-                    for encoding in self._backend.encode_batch(
-                        texts, add_special_tokens=add_special_tokens
-                    )
-                ]
+                encodings = self._backend.encode_batch(texts, add_special_tokens=add_special_tokens)
+                token_ids = [encoding.ids for encoding in encodings]
+                unk_chars += _unk_char_count(encodings, unk_id)
                 chunks.append(
                     aggregate_documents(
                         token_ids,
@@ -408,11 +445,38 @@ class Tokenizer:
             if stats.n_empty_documents:
                 warnings.append(_empty_document_warning(language, stats.n_empty_documents))
             document_stats[language] = stats
+            words: FertilityResult | None = None
+            if segmenter is not None:
+                adapter = get_segmenter(segmenter, language=language)
+                segmented = [
+                    word
+                    for document in documents
+                    for word in adapter.segment(_normalized(document, normalization))
+                ]
+                words = fertility(
+                    aggregate_words(
+                        _word_encodings(
+                            self._backend,
+                            segmented,
+                            leading_space=leading_space,
+                            # Never on a word: a special token per word would be
+                            # counted as part of the word's tokenization and
+                            # inflate fertility by one for every word.
+                            add_special_tokens=False,
+                        )
+                    ),
+                    language=language,
+                    segmenter=segmenter,
+                    segmenter_model_version=segmenter_model_version or adapter.model_version,
+                    leading_space=leading_space,
+                    unk_char_rate=(unk_chars / stats.total_chars if stats.total_chars else 0.0),
+                )
             per_language[language] = LanguageMetrics(
                 language=language,
                 compression=compression(
                     stats, unit_lengths=byte_lengths, is_blank=is_blank, language=language
                 ),
+                fertility=words,
                 roundtrip_rate=roundtrip_matches / stats.n_documents,
             )
 

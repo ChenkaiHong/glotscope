@@ -23,7 +23,7 @@ uv run --no-sync mypy --strict python/glotscope tests
 uv run --no-sync pytest --cov=glotscope --cov-report=term-missing -q   # gate: 85%
 ```
 
-Baseline as of 12 Aug 2026: **227 tests pass, 97.49% coverage**, ruff/format/mypy clean. Coverage below 85% fails the run, so `--cov` is not optional when judging a change.
+Baseline as of 13 Aug 2026: **263 tests pass, 97.45% coverage** (248 + 16 skipped without the segmenter extras), ruff/format/mypy clean. Coverage below 85% fails the run, so `--cov` is not optional when judging a change.
 
 `.[dev]` installs the extras too. The **core install is `tokenizers` alone** — `numpy`/`safetensors` are the `tier2` extra and `tiktoken` is its own, because G1's clean-install promise is measured on a core install that only claims Tier 0 and Tier 1. Import either inside the function that needs it and name the extra when it is missing.
 
@@ -136,6 +136,8 @@ Extras: all segmenters are optional (`pip install glotscope[segmenters]`). MeCab
 | `tokenizer.py` / `embeddings.py` | the §8.1 entry points; `Embeddings` refuses quantized dtypes |
 | `metrics.py` | pure Tier 1 calculations, no I/O |
 | `compression.py` | CPT/BPT/CTC and the TokEval-frozen compression rate |
+| `segmenters/` | one adapter per `Segmenter` member; refuses a missing extra and a language-scoped segmenter used elsewhere, and never falls back to whitespace |
+| `fertility.py` | fertility, continuation rate, and the >10% UNK exclusion rule |
 | `strr.py` / `roundtrip.py` | STRR under both conventions; round-trip losslessness |
 | `utf8.py` | Tier 0 UTF-8 classification |
 | `lint.py` | Tier 0 vocabulary lint: unreachable ids, special ids, byte-fallback coverage, family/algorithm inference |

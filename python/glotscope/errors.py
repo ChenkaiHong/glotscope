@@ -21,7 +21,10 @@ __all__ = [
     "LicenseError",
     "NoReferenceSetError",
     "SegmenterRequiredError",
+    "SegmenterScopeError",
+    "SegmenterUnavailableError",
     "TokenizerLoadError",
+    "UnkRateExceededError",
     "UnsupportedCheckpointError",
 ]
 
@@ -126,6 +129,80 @@ class SegmenterRequiredError(GlotscopeError):
             f"Pass segmenter=Segmenter.<X> to analyze(). There is no default "
             f"(PRD §7.1 rule 2, D6): whitespace segmentation is degenerate for "
             f"Chinese, Japanese, Thai, Khmer, Lao and Tibetan."
+        )
+
+
+class SegmenterUnavailableError(GlotscopeError):
+    """A segmenter was requested whose optional extra is not installed (§10.3).
+
+    Every segmenter but ``WHITESPACE`` is an optional extra: MeCab needs a
+    native build and a dictionary, PyICU needs system ICU, and G1's
+    clean-install promise is measured on a core install that has none of them.
+
+    This is a refusal and not a fallback. Substituting whitespace segmentation
+    for a missing adapter would produce a number — a wrong one for every
+    language that does not delimit words with spaces — under a manifest naming
+    the segmenter that was asked for. That is the exact silent incomparability
+    :class:`~glotscope.enums.Segmenter` exists to surface (D6).
+    """
+
+    def __init__(self, segmenter: str, package: str, extra: str = "segmenters") -> None:
+        self.segmenter = segmenter
+        self.package = package
+        self.extra = extra
+        super().__init__(
+            f"the {segmenter!r} segmenter needs {package!r}, which is not "
+            f"installed: pip install 'glotscope[{extra}]'. glotscope will not "
+            f"substitute another segmenter — results computed under different "
+            f"word segmentations are not comparable."
+        )
+
+
+class SegmenterScopeError(GlotscopeError):
+    """A language-scoped segmenter was requested for another language (§10.3).
+
+    MeCab is Japanese, jieba is Chinese, PyThaiNLP is Thai and khmer-nltk is
+    Khmer. Outside its language each still returns *something* — jieba on
+    English degenerates to roughly whitespace, MeCab on Devanagari hands back
+    the input — and that something lands in a table looking like a measurement.
+
+    ``ICU`` is the generic fallback and is not scoped; ``WHITESPACE`` is
+    unscoped because its degeneracy is the property it is kept for.
+    """
+
+    def __init__(self, segmenter: str, language: str, supported: Iterable[str]) -> None:
+        self.segmenter = segmenter
+        self.language = language
+        self.supported = tuple(sorted(supported))
+        super().__init__(
+            f"the {segmenter!r} segmenter is built for {list(self.supported)} and "
+            f"was asked for {language!r}. It would still return a segmentation, "
+            f"which is why this refuses rather than warns. Use Segmenter.ICU for "
+            f"a generic segmenter, or the adapter built for this language."
+        )
+
+
+class UnkRateExceededError(GlotscopeError):
+    """More than 10% of a language's characters mapped to ``[UNK]`` (§7.1 rule 6).
+
+    Petrov et al.'s convention, and it exists because UNK-collapsing tokenizers
+    otherwise fake good scores: every unrepresentable character becomes one
+    token, so fertility falls as coverage gets worse. FlanT5 fails this for 42%
+    of FLORES-200 languages.
+
+    The language is dropped rather than reported with a caveat — the number is
+    not a worse measurement, it is a measurement of the wrong thing.
+    """
+
+    def __init__(self, language: str, rate: float, threshold: float) -> None:
+        self.language = language
+        self.rate = rate
+        self.threshold = threshold
+        super().__init__(
+            f"{rate:.1%} of the characters in {language!r} map to [UNK], above "
+            f"the {threshold:.0%} exclusion threshold (§7.1 rule 6). Fertility "
+            f"falls as UNK coverage rises, so the number would reward the "
+            f"tokenizer for representing less of the language."
         )
 
 

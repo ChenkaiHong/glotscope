@@ -82,6 +82,21 @@ the first two costs a dependency tree the user may not need: Tier 2 reads `safet
 arrays, and `tiktoken` is a second tokenizer library. Segmenters are separate again because MeCab
 needs a native build and PyICU needs system ICU; the core install has no such requirement.
 
+PyICU builds against system ICU and fails with `KeyError: 'ICU_VERSION'` when `icu-config` is not on
+`PATH`. On macOS with Homebrew:
+
+```bash
+brew install icu4c
+export PATH="$(brew --prefix icu4c)/bin:$PATH"
+export PKG_CONFIG_PATH="$(brew --prefix icu4c)/lib/pkgconfig"
+pip install "glotscope[segmenters]"
+```
+
+**Word segmentation is a required, recorded parameter — there is no default.** `W(D)` is the single
+largest source of silent incomparability in this literature, so a fertility number without a
+segmenter raises, a missing segmenter extra raises rather than falling back to whitespace, and a
+language-scoped segmenter used on another language raises rather than returning a plausible number.
+
 ## Development
 
 ```bash

@@ -221,7 +221,29 @@ def test_analyze_reports_a_segmenter_it_cannot_run_as_unbuilt(
     _flores(tmp_path)
 
     assert main(_analyze_argv(tmp_path, "--segmenter", "stanza")) == 2
-    assert "segmenter" in capsys.readouterr().err
+    # Exit 2 and a message naming what is actually missing: stanza needs a
+    # pinned model, which is a decision rather than an install. Exit 1 would
+    # tell a script its argument was wrong when it was not.
+    assert "pinned model" in capsys.readouterr().err
+
+
+def test_analyze_runs_a_built_segmenter_end_to_end(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Whitespace needs no extra, so this exercises the CLI's segmenter path on
+    # every platform the core install supports.
+    _flores(tmp_path)
+
+    assert main(_analyze_argv(tmp_path, "--segmenter", "whitespace")) == 0
+
+    document = json.loads(capsys.readouterr().out)["tier1"]
+
+    assert document["per_language"]["eng_Latn"]["fertility"] > 0
+    assert document["per_language"]["hin_Deva"]["fertility"] > 0
+    # The segmenter is published beside the number it produced. A fertility
+    # value without one is not interpretable, and §7.1 rule 3 makes two values
+    # under different segmenters incomparable.
+    assert document["segmenter"] == "whitespace"
 
 
 def test_analyze_surfaces_a_missing_corpus_file_as_a_refusal(
