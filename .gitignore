@@ -32,6 +32,19 @@ glotscope-PRD.md
 HISTORY.md
 PROGRESS.md
 
+# Session working files. Each has a canonical home that is not this repository,
+# and a second copy here drifts from it silently:
+#   - the audit findings live in their artifact; this repo is where the fixes land
+#   - the plans and the timeline report are generated from a session, not the code
+glotscope-audit-*.txt
+journey-into-*.md
+docs/superpowers/
+
+# uv writes this on any `uv run`. CI installs with `uv pip install --editable`,
+# never `uv sync`, so a committed lockfile would be a second dependency record
+# that nothing reads and nothing keeps honest.
+uv.lock
+
 # Downloaded corpora and checkpoints — never committed (D12).
 # Recipes and checksums are committed; the artifacts are not.
 data/*

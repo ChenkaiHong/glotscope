@@ -23,7 +23,9 @@ uv run --no-sync mypy --strict python/glotscope tests
 uv run --no-sync pytest --cov=glotscope --cov-report=term-missing -q   # gate: 85%
 ```
 
-Baseline as of 11 Aug 2026: **64 tests pass, 96.77% coverage**, ruff/format/mypy clean. Coverage below 85% fails the run, so `--cov` is not optional when judging a change.
+Baseline as of 12 Aug 2026: **219 tests pass, 97.49% coverage**, ruff/format/mypy clean. Coverage below 85% fails the run, so `--cov` is not optional when judging a change.
+
+`.[dev]` installs the extras too. The **core install is `tokenizers` alone** — `numpy`/`safetensors` are the `tier2` extra and `tiktoken` is its own, because G1's clean-install promise is measured on a core install that only claims Tier 0 and Tier 1. Import either inside the function that needs it and name the extra when it is missing.
 
 Single test / subset:
 
@@ -46,13 +48,15 @@ make upload REPOSITORY=pypi     # -> PyPI
 
 `make leak-check` is mandatory after any change to `pyproject.toml` packaging keys. A published sdist cannot be retracted; `include` is an allowlist and `exclude` is a second guard.
 
-## Repository state (11 Aug 2026)
+## Repository state (12 Aug 2026)
 
 M0 is frozen and merged. Git repo with public remote `ChenkaiHong/glotscope`; **the default branch is `foundation`, not `main`** — CI push events trigger on `foundation` and PRs target it. `master` is a stale local branch.
 
-Implemented and tested: `metrics.py` (Rényi, parity, Gini), `utf8.py` (three-class classification + `Tier0Report` assembly), the contract layer (`enums`/`errors`/`results`/`report`/`manifest`/`corpus`/`tokenizer`/`embeddings`), and `scripts/audit_ud_licenses.py` + `data/ud-license-audit.json` (353 UD 2.18 treebanks; fail-closed README/`LICENSE.txt` agreement — 268 commercial, 31 noncommercial, 54 manual review).
+Implemented and tested: `metrics.py` (Rényi, parity, Gini), `utf8.py` (three-class classification + `Tier0Report` assembly), `lint.py` (Tier 0 vocabulary lint), the four `aggregate.py` folds, `compression.py` (CPT/BPT/CTC + CR), `strr.py`, `roundtrip.py`, `Tokenizer.from_file`/`analyze` end to end, the contract layer (`enums`/`errors`/`results`/`report`/`manifest`/`corpus`/`tokenizer`/`embeddings`), and `scripts/audit_ud_licenses.py` + `data/ud-license-audit.json` (353 UD 2.18 treebanks; fail-closed README/`LICENSE.txt` agreement — 268 commercial, 31 noncommercial, 54 manual review).
 
-Still `NotImplementedError`: the four `aggregate.py` folds (`aggregate_documents`, `aggregate_words`, `attribute_scripts`, `align_boundaries`). Every `cli.py` handler is a stub that prints its milestone and exits `2`. No `tier0/`/`tier1/`/`tier2/` packages — deliberately not stubbed (`docs/build-order.md`); their contracts are already pinned by the `Tier1Report` methods and the `aggregate` boundary.
+`glotscope lint` and `glotscope analyze` are live and produce a §9 document. **Exit codes are part of the interface**: `0` produced a document, `1` is a typed refusal, `2` is scheduled but not built. A mistyped path is `1`; a Hub identifier is `2`, because `from_pretrained` is the missing piece and saying "your input was wrong" would send the reader after the wrong fix.
+
+Still `NotImplementedError`: `from_pretrained`, `from_tiktoken`, everything at Tier 2, and the `compare`/`verify`/`leaderboard` handlers. `Report.from_json` is blocked on `Tier0Report.to_dict` being lossy — it drops the partial-UTF-8/unreachable/special id lists. No `tier0/`/`tier1/`/`tier2/` packages — deliberately not stubbed (`docs/build-order.md`); their contracts are already pinned by the `Tier1Report` methods and the `aggregate` boundary.
 
 Not yet written: the `glotscope verify` CI job against a committed `result.json` (G4), the nightly leaderboard re-run, `leaderboard.yaml`, `results/`. The 12-cell quality matrix (3.10–3.13 × {ubuntu, macos, windows}) is implemented and green.
 
@@ -120,7 +124,10 @@ Extras: all segmenters are optional (`pip install glotscope[segmenters]`). MeCab
 | `corpus.py` | capability gating + the §10.1 registry |
 | `tokenizer.py` / `embeddings.py` | the §8.1 entry points; `Embeddings` refuses quantized dtypes |
 | `metrics.py` | pure Tier 1 calculations, no I/O |
+| `compression.py` | CPT/BPT/CTC and the TokEval-frozen compression rate |
+| `strr.py` / `roundtrip.py` | STRR under both conventions; round-trip losslessness |
 | `utf8.py` | Tier 0 UTF-8 classification |
+| `lint.py` | Tier 0 vocabulary lint: unreachable ids, special ids, byte-fallback coverage, family/algorithm inference |
 | `cli.py` | the six §8.2 subcommands via stdlib `argparse` (no CLI framework — the core dependency list is load-bearing for G1) |
 
 Three invariants are enforced structurally rather than by comment, and are already tested — preserve the shape, not just the behaviour:

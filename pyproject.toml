@@ -27,11 +27,12 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Typing :: Typed",
 ]
+# The core install is Tier 0 + Tier 1 and nothing else. G1 promises a clean
+# install across twelve platform cells, so this list is load-bearing: every entry
+# is a tree the user resolves before a single metric runs. Anything one tier
+# alone imports belongs in that tier's extra.
 dependencies = [
     "tokenizers>=0.23",
-    "tiktoken>=0.7",
-    "safetensors>=0.4",
-    "numpy>=1.24,<2.5",
 ]
 
 [project.urls]
@@ -53,6 +54,18 @@ segmenters = [
     "khmer-nltk>=1.6",
     "PyICU>=2.13",
 ]
+# Tier 2 reads E_in/E_out out of safetensors shards and works on them as arrays.
+# Neither is imported anywhere at Tier 0 or Tier 1, so neither belongs in a core
+# install that promises to be Tier 0 + Tier 1.
+tier2 = [
+    "safetensors>=0.4",
+    "numpy>=1.24,<2.5",
+]
+# tiktoken encodings are one of the three §8.1 entry points, and the only one
+# that needs a second tokenizer library.
+tiktoken = [
+    "tiktoken>=0.7",
+]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
@@ -60,6 +73,12 @@ dev = [
     "mypy>=1.11",
     "ruff>=0.6",
     "twine==7.0.0",
+    # The extras above, because the test suite and mypy --strict cover every
+    # tier: a dev install that could not type-check embeddings.py would make the
+    # split above invisible to CI.
+    "safetensors>=0.4",
+    "numpy>=1.24,<2.5",
+    "tiktoken>=0.7",
 ]
 
 [project.scripts]
@@ -73,7 +92,15 @@ packages = ["python/glotscope"]
 # distribution. A published sdist cannot be retracted, so `include` is an allowlist and
 # `exclude` is a second guard. Re-run a leak check after any packaging change.
 [tool.hatch.build.targets.sdist]
-include = ["python/", "tests/", "docs/", "scripts/", "LICENSE", "README.md"]
+include = [
+    "python/glotscope/**",
+    "tests/**",
+    "docs/build-order.md",
+    "docs/divergences.md",
+    "docs/m0-source-audit.md",
+    "LICENSE",
+    "README.md",
+]
 exclude = ["glotscope-PRD.md", "HISTORY.md"]
 
 [tool.hatch.build.targets.sdist.force-include]
