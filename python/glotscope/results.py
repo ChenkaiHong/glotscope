@@ -216,8 +216,15 @@ class RenyiResult:
     in bits under the label "Renyi Entropy (alpha=2.5)", which therefore cannot
     serve as an efficiency reference."""
 
+    nominal_vocab_size: int | None = None
+    """The selected nominal denominator, when nominal normalization is used."""
+
     def comparability_key(self) -> Mapping[str, object]:
-        return {"alpha": self.alpha, "normalizer": self.normalizer}
+        return {
+            "alpha": self.alpha,
+            "normalizer": self.normalizer,
+            "nominal_vocab_size": self.nominal_vocab_size,
+        }
 
 
 @dataclass(frozen=True, slots=True)

@@ -126,6 +126,16 @@ def detect_algorithm(spec: Mapping[str, Any]) -> Algorithm:
     model = spec.get("model") or {}
     model_type = model.get("type")
     if not isinstance(model_type, str):
+        if "merges" in model:
+            family = classify_family(spec)
+            if family is TokenizerFamily.BYTE_LEVEL:
+                return Algorithm.BYTE_LEVEL_BPE
+            if family is TokenizerFamily.BYTE_FALLBACK:
+                return Algorithm.BYTE_FALLBACK_BPE
+        if "continuing_subword_prefix" in model:
+            return Algorithm.WORDPIECE
+        if "unk_id" in model and isinstance(model.get("vocab"), list):
+            return Algorithm.UNIGRAM_LM
         return Algorithm.UNKNOWN
     if model_type != "BPE":
         return _ALGORITHM_BY_MODEL_TYPE.get(model_type, Algorithm.UNKNOWN)

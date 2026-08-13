@@ -13,6 +13,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from glotscope.aggregate import (
+    DocumentStats,
     aggregate_documents,
     aggregate_words,
     align_boundaries,
@@ -83,6 +84,16 @@ def test_empty_batch_yields_zeroed_stats() -> None:
     assert stats.n_documents == 0
     assert stats.total_tokens == 0
     assert stats.per_document_tokens == ()
+
+
+def test_document_stats_combine_matches_one_shot_aggregation() -> None:
+    left = aggregate_documents([[1, 2], [2]], char_lengths=[2, 1], byte_lengths=[2, 1])
+    right = aggregate_documents([[3], []], char_lengths=[1, 0], byte_lengths=[1, 0])
+    one_shot = aggregate_documents(
+        [[1, 2], [2], [3], []], char_lengths=[2, 1, 1, 0], byte_lengths=[2, 1, 1, 0]
+    )
+
+    assert DocumentStats.combine((left, right)) == one_shot
 
 
 @pytest.mark.property

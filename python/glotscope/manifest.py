@@ -43,7 +43,7 @@ __all__ = [
     "environment",
 ]
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 """Bumped whenever any serialized key or enum value changes."""
 
 
@@ -281,7 +281,9 @@ def canonical_json(document: Mapping[str, Any]) -> str:
     tighter guarantee should round explicitly before serialization rather than
     relying on the encoder.
     """
-    return json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(
+        document, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
 
 
 @dataclass(frozen=True, slots=True)

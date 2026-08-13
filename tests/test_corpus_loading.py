@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from glotscope.corpus import REGISTRY, Corpus
+from glotscope.corpus import REGISTRY, Corpus, corpus_digest
 from glotscope.enums import Capability
 from glotscope.errors import CapabilityError, CorpusIntegrityError, LicenseError
 
@@ -105,6 +105,15 @@ def test_loading_reads_the_downloaded_files_and_records_a_digest(tmp_path: Path)
     assert corpus.sha256 == ""
 
 
+def test_loading_splits_only_lf_and_preserves_unicode_line_separators(tmp_path: Path) -> None:
+    corpus = Corpus.fineweb2(version=_SAMPLE, languages=["eng_Latn"])
+    directory = tmp_path / corpus.spec.id / corpus.version / corpus.split
+    directory.mkdir(parents=True)
+    (directory / "eng_Latn.txt").write_text("one\u2028two\nthree\u0085four\n", encoding="utf-8")
+
+    assert corpus.load(tmp_path).lines["eng_Latn"] == ("one\u2028two", "three\u0085four")
+
+
 def test_the_digest_is_stable_across_loads_and_sensitive_to_content(tmp_path: Path) -> None:
     corpus = Corpus.flores_plus(["eng_Latn"])
     _write(tmp_path, "flores_plus", corpus.version, "devtest", eng_Latn=_ENGLISH)
@@ -114,6 +123,75 @@ def test_the_digest_is_stable_across_loads_and_sensitive_to_content(tmp_path: Pa
 
     _write(tmp_path, "flores_plus", corpus.version, "devtest", eng_Latn=("Changed.", "It rained."))
     assert corpus.load(tmp_path).corpus.sha256 != first
+
+
+def test_the_digest_framing_cannot_be_forged_by_a_language_name() -> None:
+    # Joining "{language}:{filehash}" with newlines is not injective: a language
+    # code carrying both delimiters reproduces a two-language corpus's framing
+    # byte for byte, so two different corpora hash the same. Corpus.resolve
+    # refuses such a code, which makes this the second line of defence rather
+    # than the first — but a digest is what a manifest pins, and one that can be
+    # forged by naming is not a digest.
+    honest = corpus_digest({"eng_Latn": "a" * 64, "hin_Deva": "b" * 64})
+    forged = corpus_digest({f"eng_Latn:{'a' * 64}\nhin_Deva": "b" * 64})
+
+    assert honest != forged
+
+
+def test_the_digest_does_not_depend_on_the_order_languages_were_requested() -> None:
+    # The corpus is a set of files, so the digest has to be order-invariant or
+    # the same bytes pin two different values depending on how they were asked
+    # for.
+    assert corpus_digest({"eng_Latn": "a" * 64, "hin_Deva": "b" * 64}) == corpus_digest(
+        {"hin_Deva": "b" * 64, "eng_Latn": "a" * 64}
+    )
+
+
+def test_a_byte_order_mark_does_not_contaminate_the_first_document(tmp_path: Path) -> None:
+    # A BOM is invisible in an editor and would otherwise ride into document 0,
+    # adding three bytes to every byte-count metric and changing how the first
+    # document tokenizes.
+    corpus = Corpus.fineweb2(version=_SAMPLE, languages=["eng_Latn"])
+    directory = tmp_path / corpus.spec.id / corpus.version / corpus.split
+    directory.mkdir(parents=True)
+    (directory / "eng_Latn.txt").write_bytes("\ufeffThe cat sat.\nIt rained.\n".encode())
+
+    assert corpus.load(tmp_path).lines["eng_Latn"] == _ENGLISH
+
+
+def test_invalid_utf8_is_refused_as_a_corpus_integrity_failure(tmp_path: Path) -> None:
+    # A bare UnicodeDecodeError escaping load() tells a leaderboard run nothing
+    # about which corpus failed or why, and is not one of the typed refusals a
+    # caller can act on.
+    corpus = Corpus.fineweb2(version=_SAMPLE, languages=["eng_Latn"])
+    directory = tmp_path / corpus.spec.id / corpus.version / corpus.split
+    directory.mkdir(parents=True)
+    (directory / "eng_Latn.txt").write_bytes(b"The cat sat.\n\xff\xfe\n")
+
+    with pytest.raises(CorpusIntegrityError, match="not valid UTF-8"):
+        corpus.load(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "code",
+    ["../../etc/passwd", "/etc/passwd", "..", "eng/Latn", ".hidden", "eng_Latn\n"],
+)
+def test_a_language_code_that_is_not_a_safe_path_component_is_refused(code: str) -> None:
+    # Language codes are interpolated into <root>/<id>/<version>/<split>/<code>.txt.
+    # Today the codes and the root come from the same user, so the escape reads
+    # that user's own files — but a language set arriving from leaderboard.yaml
+    # or from a result.json in a pull request is the case this closes ahead of.
+    with pytest.raises(ValueError, match="language code"):
+        Corpus.flores_plus([code])
+
+
+def test_the_version_and_split_are_validated_as_path_components_too() -> None:
+    # Both are interpolated into the same path and both are caller-supplied.
+    with pytest.raises(ValueError, match="version"):
+        Corpus.fineweb2(["eng_Latn"], version="../../../etc")
+
+    with pytest.raises(ValueError, match="split"):
+        Corpus.flores_plus(["eng_Latn"], split="../secrets")
 
 
 def test_a_digest_mismatch_is_refused_rather_than_reported(tmp_path: Path) -> None:

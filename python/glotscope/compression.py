@@ -36,6 +36,7 @@ def compression(
     stats: DocumentStats,
     *,
     unit_lengths: Sequence[int],
+    is_blank: Sequence[bool] | None = None,
     language: str,
     unit: str = BYTES,
 ) -> CompressionResult:
@@ -78,6 +79,11 @@ def compression(
         )
     if any(length < 0 for length in unit_lengths):
         raise ValueError("unit_lengths cannot be negative")
+    if is_blank is not None and len(is_blank) != stats.n_documents:
+        raise ValueError(
+            f"is_blank and the folded batch must be of equal length: "
+            f"got {len(is_blank)} and {stats.n_documents}"
+        )
     if stats.total_tokens == 0:
         raise ValueError(
             "compression is undefined for a corpus with no tokens: every ratio "
@@ -86,8 +92,9 @@ def compression(
 
     kept_units = 0
     kept_tokens = 0
-    for units, tokens in zip(unit_lengths, stats.per_document_tokens, strict=True):
-        if units == 0 or tokens == 0:
+    blanks = is_blank if is_blank is not None else (False,) * stats.n_documents
+    for units, tokens, blank in zip(unit_lengths, stats.per_document_tokens, blanks, strict=True):
+        if blank or units == 0 or tokens == 0:
             continue
         kept_units += units
         kept_tokens += tokens

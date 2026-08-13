@@ -14,6 +14,7 @@ official archive and stored in ``data/ud-license-audit.json``.
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -30,6 +31,7 @@ __all__ = [
     "Corpus",
     "CorpusSpec",
     "LoadedCorpus",
+    "corpus_digest",
 ]
 
 FLORES_PLUS_VERSION = "2024.08"
@@ -42,6 +44,59 @@ release means regenerating that audit first."""
 
 _LICENSE_FILTERS = ("commercial",)
 """Known values for ``--license-filter`` (§10.4)."""
+
+_SAFE_PATH_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+"""Language codes, versions and splits are interpolated into a filesystem path,
+so each has to be a single harmless path component. Leading dots are excluded,
+which is what rules out ``..``; separators are outside the character class, which
+is what rules out ``../etc`` and an absolute path that would discard the root
+entirely. Deliberately strict — every code in the registry (``eng_Latn``,
+``UD_Korean-Kaist``) and every pinned release (``2024.08``) satisfies it, and a
+future code that does not should fail loudly here rather than reach ``open``."""
+
+
+def _require_path_component(kind: str, value: str) -> str:
+    """Refuse a caller-supplied string that would not stay inside the corpus root.
+
+    Today the language set and the root come from the same person, so an escape
+    reads that person's own files. It stops being that the moment a language set
+    arrives from ``leaderboard.yaml`` or from a ``result.json`` in a pull
+    request, which is why this lands before ``verify`` and ``leaderboard`` rather
+    than after.
+
+    Raises:
+        ValueError: naming which component was rejected.
+    """
+    if not _SAFE_PATH_COMPONENT.fullmatch(value):
+        raise ValueError(
+            f"{kind} {value!r} is not a single safe path component. It is "
+            f"interpolated into <root>/<corpus>/<version>/<split>/<language>.txt, "
+            f"so it must start with a letter or digit and contain only letters, "
+            f"digits, '.', '_' and '-'."
+        )
+    return value
+
+
+def corpus_digest(file_digests: Mapping[str, str]) -> str:
+    """Hash the per-language file digests under an unambiguous framing.
+
+    Each field is length-prefixed before hashing. That is what makes the framing
+    injective: the delimiter-joined form it replaces (``"{language}:{digest}"``
+    lines) can be reproduced exactly by one language code carrying both
+    delimiters, so two different corpora would hash to the same value.
+    :meth:`Corpus.resolve` already refuses such a code — but this digest is what
+    a manifest pins, and one that can be forged by naming is not a digest.
+
+    Sorted by language, so the value describes the set of files rather than the
+    order they were requested in.
+    """
+    hasher = hashlib.sha256()
+    for language in sorted(file_digests):
+        for field in (language.encode("utf-8"), file_digests[language].encode("utf-8")):
+            hasher.update(str(len(field)).encode("ascii"))
+            hasher.update(b":")
+            hasher.update(field)
+    return hasher.hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,7 +343,7 @@ class Corpus:
 
         directory = Path(root) / self.spec.id / self.version / self.split
         lines: dict[str, tuple[str, ...]] = {}
-        digests: list[str] = []
+        digests: dict[str, str] = {}
         for language in self.languages:
             path = directory / f"{language}.txt"
             try:
@@ -299,10 +354,26 @@ class Corpus:
                     f"no file for {language!r}: expected {path}. The library ships "
                     f"no corpora — see the download recipe on its registry entry",
                 ) from exc
-            lines[language] = tuple(raw.decode("utf-8").splitlines())
-            digests.append(f"{language}:{hashlib.sha256(raw).hexdigest()}")
+            try:
+                decoded = raw.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise CorpusIntegrityError(
+                    self.spec.id,
+                    f"the file for {language!r} is not valid UTF-8 at byte "
+                    f"{exc.start}: {exc.reason}. Every metric here is defined over "
+                    f"decoded text, so there is nothing to fall back to",
+                ) from exc
+            # A BOM is invisible in an editor and would otherwise ride into
+            # document 0, adding three bytes to every byte-count metric and
+            # changing how the first document tokenizes. The digest below is
+            # taken over the bytes on disk, which still include it.
+            decoded = decoded.removeprefix("\ufeff")
+            lines[language] = tuple(decoded.replace("\r\n", "\n").replace("\r", "\n").split("\n"))
+            if lines[language] and lines[language][-1] == "":
+                lines[language] = lines[language][:-1]
+            digests[language] = hashlib.sha256(raw).hexdigest()
 
-        digest = hashlib.sha256("\n".join(sorted(digests)).encode("utf-8")).hexdigest()
+        digest = corpus_digest(digests)
         if self.sha256 and self.sha256 != digest:
             raise CorpusIntegrityError(
                 self.spec.id,
@@ -382,11 +453,16 @@ class Corpus:
         would be a second thing to drift, and the value it carries lands in a
         manifest field other people cite.
 
+        Also the one place the language codes, the version and the split are
+        checked for being safe path components — all three are interpolated into
+        the path :meth:`load` reads, and all three are caller-supplied.
+
         Raises:
             KeyError: if the corpus is not registered.
-            ValueError: if the entry pins no release and none was given. That is
+            ValueError: if the entry pins no release and none was given — that is
                 FineWeb2, where what gets evaluated is a sample no upstream tag
-                describes; inventing one would be worse than asking.
+                describes and inventing one would be worse than asking — or if a
+                language code, version or split would not stay inside the root.
         """
         if corpus_id not in REGISTRY:
             raise KeyError(
@@ -405,8 +481,10 @@ class Corpus:
             )
         return cls(
             spec=spec,
-            languages=tuple(languages),
-            version=resolved_version,
-            split=split if split is not None else spec.default_split,
+            languages=tuple(_require_path_component("language code", code) for code in languages),
+            version=_require_path_component("corpus version", resolved_version),
+            split=_require_path_component(
+                "corpus split", split if split is not None else spec.default_split
+            ),
             sha256=sha256,
         )

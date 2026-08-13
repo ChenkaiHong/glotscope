@@ -14,10 +14,10 @@ def classify_utf8_token(token_bytes: bytes) -> TokenClass:
     """Classify one byte token into the three disjoint PRD §7.8 classes."""
     try:
         token_bytes.decode("utf-8", errors="strict")
-    except UnicodeDecodeError as error:
-        if error.reason == "unexpected end of data":
-            return TokenClass.PARTIAL_UTF8
-        return TokenClass.ILL_FORMED_NOT_PARTIAL
+    except UnicodeDecodeError:
+        if any(byte in (0xC0, 0xC1) or byte >= 0xF5 for byte in token_bytes):
+            return TokenClass.ILL_FORMED_NOT_PARTIAL
+        return TokenClass.PARTIAL_UTF8
     return TokenClass.WELL_FORMED
 
 
@@ -50,5 +50,12 @@ def build_utf8_report(
         partial_utf8_tokens=tuple(sorted(partial)),
         unreachable_tokens=tuple(sorted(set(unreachable_tokens))),
         special_tokens=tuple(sorted(set(special_tokens))),
-        byte_fallback_coverage=len(byte_values),
+        byte_fallback_coverage=(
+            len(byte_values) if family is not TokenizerFamily.CODE_POINT else None
+        ),
+        non_utf8_byte_values=(
+            tuple(sorted(byte_values & set(range(0xF5, 0x100))))
+            if family is not TokenizerFamily.CODE_POINT
+            else None
+        ),
     )

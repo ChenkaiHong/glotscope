@@ -26,7 +26,7 @@ from glotscope.lint import detect_algorithm, lint_backend
 from glotscope.manifest import ParameterManifest, TokenizerManifest
 from glotscope.report import Tier0Report, Tier1Report, Tier2Report
 from glotscope.results import CorpusMetrics, LanguageMetrics
-from glotscope.roundtrip import roundtrip_rate_from_ids
+from glotscope.roundtrip import roundtrip_matches_from_ids
 
 if TYPE_CHECKING:
     from glotscope.embeddings import Embeddings
@@ -57,6 +57,9 @@ _NO_NORMALIZATION_WARNING = (
     "all sensitive to Unicode form, so these numbers are comparable only against "
     "another run over identically encoded text"
 )
+
+_ANALYSIS_BATCH_SIZE = 8192
+"""Maximum documents whose normalized text and encodings are live together."""
 
 _UNICODE_FORMS: dict[Normalization, Literal["NFC", "NFD", "NFKC", "NFKD"]] = {
     Normalization.NFC: "NFC",
@@ -205,6 +208,11 @@ class Tokenizer:
         with no weights, so Tier 2 is unavailable. Roughly half the §11 core tier
         is in this position, which is why the leaderboard must mark the Tier 2
         column ``n/a (tokenizer-only)`` rather than leaving it visually empty.
+
+        ``tiktoken`` is the ``tiktoken`` extra rather than a core dependency.
+        Import it inside this method and name the extra when it is missing: an
+        unguarded top-level import would make every core install carry a second
+        tokenizer library in order to reach ``from_file``.
         """
         raise NotImplementedError
 
@@ -298,7 +306,7 @@ class Tokenizer:
         corpus: LoadedCorpus | Corpus,
         *,
         leading_space: bool = True,
-        normalization: Normalization = Normalization.NFC,
+        normalization: Normalization | str = Normalization.NFC,
         add_special_tokens: bool = False,
         segmenter: Segmenter | None = None,
         segmenter_model_version: str | None = None,
@@ -348,6 +356,7 @@ class Tokenizer:
             ValueError: if the corpus was never loaded, resolved to no languages,
                 or holds no documents for a language it names.
         """
+        normalization = Normalization(normalization)
         loaded = _require_loaded(corpus)
         _reject_unrunnable_segmenter(segmenter, loaded.corpus)
         if not loaded.lines:
@@ -368,26 +377,43 @@ class Tokenizer:
                     f"corpus {loaded.corpus.spec.id!r} holds no documents for "
                     f"{language!r}, and every Tier 1 ratio divides by a corpus total"
                 )
-            texts = [_normalized(document, normalization) for document in documents]
-            byte_lengths = [len(text.encode("utf-8")) for text in texts]
-            token_ids = [
-                encoding.ids
-                for encoding in self._backend.encode_batch(
-                    texts, add_special_tokens=add_special_tokens
+            chunks: list[DocumentStats] = []
+            byte_lengths: list[int] = []
+            is_blank: list[bool] = []
+            roundtrip_matches = 0
+            for start in range(0, len(documents), _ANALYSIS_BATCH_SIZE):
+                texts = [
+                    _normalized(document, normalization)
+                    for document in documents[start : start + _ANALYSIS_BATCH_SIZE]
+                ]
+                chunk_bytes = [len(text.encode("utf-8")) for text in texts]
+                token_ids = [
+                    encoding.ids
+                    for encoding in self._backend.encode_batch(
+                        texts, add_special_tokens=add_special_tokens
+                    )
+                ]
+                chunks.append(
+                    aggregate_documents(
+                        token_ids,
+                        char_lengths=[len(text) for text in texts],
+                        byte_lengths=chunk_bytes,
+                    )
                 )
-            ]
-            stats = aggregate_documents(
-                token_ids,
-                char_lengths=[len(text) for text in texts],
-                byte_lengths=byte_lengths,
-            )
+                byte_lengths.extend(chunk_bytes)
+                is_blank.extend(not text.strip() for text in texts)
+                matched, _ = roundtrip_matches_from_ids(self._backend, texts, token_ids)
+                roundtrip_matches += matched
+            stats = DocumentStats.combine(chunks)
             if stats.n_empty_documents:
                 warnings.append(_empty_document_warning(language, stats.n_empty_documents))
             document_stats[language] = stats
             per_language[language] = LanguageMetrics(
                 language=language,
-                compression=compression(stats, unit_lengths=byte_lengths, language=language),
-                roundtrip_rate=roundtrip_rate_from_ids(self._backend, texts, token_ids),
+                compression=compression(
+                    stats, unit_lengths=byte_lengths, is_blank=is_blank, language=language
+                ),
+                roundtrip_rate=roundtrip_matches / stats.n_documents,
             )
 
         return Tier1Report(

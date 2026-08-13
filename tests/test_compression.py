@@ -67,6 +67,14 @@ def test_compression_rate_excludes_empty_tokenizations_and_zero_unit_records() -
     assert result.ctc == 3
 
 
+def test_compression_rate_excludes_whitespace_only_records() -> None:
+    stats = aggregate_documents([[1, 2], [3]], char_lengths=[4, 16], byte_lengths=[4, 16])
+
+    result = compression(stats, unit_lengths=[4, 16], is_blank=[False, True], language="eng_Latn")
+
+    assert result.compression_rate == pytest.approx(2.0)
+
+
 def test_excluded_records_can_move_the_rate_away_from_bpt() -> None:
     stats = aggregate_documents(
         [[1, 2], [3, 4, 5, 6]],

@@ -82,10 +82,14 @@ class Tier0Report:
     """``encode(decode(id)) != [id]``."""
 
     special_tokens: tuple[int, ...]
-    byte_fallback_coverage: int
-    """How many of the 256 byte values the vocabulary contains. Distinguishes the
+    byte_fallback_coverage: int | None
+    """How many of the 256 byte values the vocabulary contains. ``None`` means
+    byte fallback is not applicable for this code-point tokenizer. Distinguishes the
     full 256 from the 243 that UTF-8 actually uses — the gap is a Tier 2
     reference-set source, and StarCoder2 additionally misses 0xF1."""
+
+    non_utf8_byte_values: tuple[int, ...] | None = None
+    """Present bytes in the 0xF5-0xFF range; ``None`` when not applicable."""
 
     @property
     def unreachable_count(self) -> int:
@@ -112,6 +116,9 @@ class Tier0Report:
             "token_classes": {k.value: v for k, v in sorted(self.token_classes.items())},
             "unreachable_count": self.unreachable_count,
             "byte_fallback_coverage": self.byte_fallback_coverage,
+            "non_utf8_byte_values": list(self.non_utf8_byte_values)
+            if self.non_utf8_byte_values is not None
+            else None,
         }
 
 
@@ -222,6 +229,18 @@ class Tier1Report:
         exactly that reason.
         """
         stats = self._require_stats("gini")
+        if Capability.PARALLEL not in self.capabilities:
+            raise CapabilityError(
+                "gini",
+                Capability.PARALLEL.value,
+                self.corpus_id or "<unidentified corpus>",
+                (capability.value for capability in self.capabilities),
+            )
+        if len(stats) < 2:
+            raise ValueError("gini requires at least two parallel languages")
+        line_counts = {language: value.n_documents for language, value in stats.items()}
+        if len(set(line_counts.values())) != 1:
+            raise ValueError(f"parallel languages have unequal line counts: {line_counts}")
         costs = {
             language: language_stats.total_tokens / language_stats.n_documents
             for language, language_stats in stats.items()
@@ -301,6 +320,19 @@ class Tier1Report:
             corpus_level["renyi_efficiency"] = self.corpus_level.renyi.value
             corpus_level["renyi_alpha"] = self.corpus_level.renyi.alpha
             corpus_level["renyi_normalizer"] = self.corpus_level.renyi.normalizer.value
+            if self.corpus_level.renyi.nominal_vocab_size is not None:
+                corpus_level["renyi_nominal_vocab_size"] = (
+                    self.corpus_level.renyi.nominal_vocab_size
+                )
+        if self.corpus_level.parity is not None:
+            parity = self.corpus_level.parity
+            corpus_level["parity"] = {
+                "reference_language": parity.reference_language,
+                "macro_parity": parity.macro_parity,
+                "worst_case_language": parity.worst_case_language,
+                "worst_case_parity": parity.worst_case_parity,
+                "per_language": dict(parity.per_language),
+            }
 
         return {
             "per_language": per_language,

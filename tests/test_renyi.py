@@ -3,7 +3,8 @@ from __future__ import annotations
 import pytest
 
 from glotscope.enums import RenyiNormalizer
-from glotscope.metrics import renyi_efficiency
+from glotscope.metrics import renyi_efficiency, renyi_efficiency_from_counts
+from glotscope.results import require_comparable
 
 
 @pytest.mark.reference
@@ -73,3 +74,32 @@ def test_renyi_rejects_invalid_parameters(
             normalizer=normalizer,
             nominal_vocab_size=nominal_vocab_size,
         )
+
+
+def test_renyi_normalizes_string_enums_and_records_the_nominal_denominator() -> None:
+    observed = renyi_efficiency(["a", "a", "b"], alpha=2.5, normalizer="observed")
+    nominal = renyi_efficiency(
+        ["a", "a", "b"], alpha=2.5, normalizer="nominal", nominal_vocab_size=32
+    )
+
+    assert observed.normalizer is RenyiNormalizer.OBSERVED
+    assert nominal.normalizer is RenyiNormalizer.NOMINAL
+    assert nominal.nominal_vocab_size == 32
+    with pytest.raises(Exception, match="nominal_vocab_size"):
+        require_comparable(
+            nominal,
+            renyi_efficiency(
+                ["a", "a", "b"], alpha=2.5, normalizer="nominal", nominal_vocab_size=16
+            ),
+        )
+
+
+@pytest.mark.parametrize("alpha", [float("nan"), float("inf"), float("-inf")])
+def test_renyi_refuses_nonfinite_alpha(alpha: float) -> None:
+    with pytest.raises(ValueError, match="positive"):
+        renyi_efficiency(["a"], alpha=alpha)
+
+
+def test_renyi_refuses_zero_count_types() -> None:
+    with pytest.raises(ValueError, match="positive"):
+        renyi_efficiency_from_counts({"a": 1, "unused": 0}, alpha=2.5)

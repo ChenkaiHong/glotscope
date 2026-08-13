@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-__all__ = ["roundtrip_rate", "roundtrip_rate_from_ids"]
+__all__ = ["roundtrip_matches_from_ids", "roundtrip_rate", "roundtrip_rate_from_ids"]
 
 
 def roundtrip_rate(
@@ -81,8 +81,27 @@ def roundtrip_rate_from_ids(
             f"got {len(documents)} and {len(token_ids)}"
         )
 
+    survived, total = roundtrip_matches_from_ids(backend, documents, token_ids)
+    return survived / total
+
+
+def roundtrip_matches_from_ids(
+    backend: Any,
+    documents: Sequence[str],
+    token_ids: Sequence[Sequence[int]],
+) -> tuple[int, int]:
+    """Return matching-document and total counts for a single encoded batch."""
+    if not documents:
+        raise ValueError("round-trip losslessness requires at least one document")
+    if len(documents) != len(token_ids):
+        raise ValueError(
+            f"documents and token_ids must be of equal length: "
+            f"got {len(documents)} and {len(token_ids)}"
+        )
     decoded = backend.decode_batch([list(ids) for ids in token_ids], skip_special_tokens=False)
-    survived = sum(
-        1 for original, restored in zip(documents, decoded, strict=True) if original == restored
+    return (
+        sum(
+            1 for original, restored in zip(documents, decoded, strict=True) if original == restored
+        ),
+        len(documents),
     )
-    return survived / len(documents)

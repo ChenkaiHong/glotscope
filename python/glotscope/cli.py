@@ -30,14 +30,16 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from glotscope import __version__, backend
 from glotscope.corpus import REGISTRY, Corpus
-from glotscope.enums import Normalization, Segmenter
-from glotscope.errors import GlotscopeError
+from glotscope.enums import Normalization, RenyiNormalizer, Segmenter
+from glotscope.errors import GlotscopeError, TokenizerLoadError
 from glotscope.manifest import Manifest, canonical_json, environment
 from glotscope.report import Report
+from glotscope.results import CorpusMetrics
 from glotscope.tokenizer import Tokenizer
 
 __all__ = ["build_parser", "main"]
@@ -123,6 +125,15 @@ def build_parser() -> argparse.ArgumentParser:
         "back to the source text",
     )
     analyze.add_argument("--license-filter", choices=["commercial"], default=None)
+    analyze.add_argument("--parity-reference", default=None)
+    analyze.add_argument("--gini", action="store_true")
+    analyze.add_argument("--renyi-alpha", type=float, default=None)
+    analyze.add_argument(
+        "--renyi-normalizer",
+        choices=[member.value for member in RenyiNormalizer],
+        default=RenyiNormalizer.OBSERVED.value,
+    )
+    analyze.add_argument("--nominal-vocab-size", type=int, default=None)
     analyze.add_argument("--out", default=None, help="write result.json here (default: stdout)")
 
     detect = sub.add_parser("detect", help="Tier 2: under-trained-token candidates")
@@ -157,13 +168,39 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _looks_like_a_local_path(source: str) -> bool:
+    """Tell a path the user meant from a Hub identifier they meant.
+
+    Only reached once the source has been shown not to exist, and the two
+    answers differ in what they tell the reader: a path is a wrong argument to
+    fix now, an identifier is a feature scheduled for a later release. Guessing
+    "identifier" for both is what made a typo look like a missing feature.
+    """
+    path = Path(source)
+    return (
+        path.is_absolute()
+        or source.startswith(("~", "./", "../", ".\\", "..\\"))
+        or path.suffix == ".json"
+        # A parent that exists means the user was naming a place on this disk.
+        # "." is excluded: a bare name is the shape a Hub identifier takes.
+        or (str(path.parent) != "." and path.parent.is_dir())
+    )
+
+
 def _load_tokenizer(source: str, revision: str | None) -> Tokenizer:
     """Load the tokenizer named on the command line.
 
-    Local ``tokenizer.json`` files only. ``from_pretrained`` is not implemented,
-    so a revision or a Hub-style identifier is reported as unbuilt rather than
-    resolved to something else — a leaderboard row that silently analysed a
-    different artifact than it names is the failure §11 exists to prevent.
+    Local sources only — a ``tokenizer.json`` or a directory holding one.
+    ``from_pretrained`` is not implemented, so a revision or a Hub-style
+    identifier is reported as unbuilt rather than resolved to something else: a
+    leaderboard row that silently analysed a different artifact than it names is
+    the failure §11 exists to prevent.
+
+    Raises:
+        TokenizerLoadError: the source names a place on this disk that holds no
+            tokenizer. Exit 1 — a wrong argument, not a missing feature.
+        NotImplementedError: the source is a Hub identifier or carries a
+            revision. Exit 2 — scheduled, not refused.
     """
     if revision is not None:
         raise NotImplementedError(
@@ -171,12 +208,19 @@ def _load_tokenizer(source: str, revision: str | None) -> Tokenizer:
             "not implemented in this release. Pass a local tokenizer.json path."
         )
     path = Path(source)
-    if not path.is_file():
-        raise NotImplementedError(
-            f"{source!r} is not a local file. Loading by Hub identifier needs "
-            f"from_pretrained(), which is not implemented in this release."
-        )
-    return Tokenizer.from_file(path)
+    if path.is_dir():
+        candidate = path / "tokenizer.json"
+        if not candidate.is_file():
+            raise TokenizerLoadError(source, "a directory holding no tokenizer.json")
+        return Tokenizer.from_file(candidate)
+    if path.is_file():
+        return Tokenizer.from_file(path)
+    if _looks_like_a_local_path(source):
+        raise TokenizerLoadError(source, "no such file or directory")
+    raise NotImplementedError(
+        f"{source!r} is not a local file. Loading by Hub identifier needs "
+        f"from_pretrained(), which is not implemented in this release."
+    )
 
 
 def _emit(document: str, out: str | None) -> None:
@@ -218,6 +262,18 @@ def _analyze(args: argparse.Namespace) -> int:
         add_special_tokens=args.add_special_tokens,
         segmenter=Segmenter(args.segmenter) if args.segmenter is not None else None,
     )
+    parity = tier1.parity(args.parity_reference) if args.parity_reference is not None else None
+    gini = tier1.gini() if args.gini else None
+    renyi = (
+        tier1.renyi_efficiency(
+            args.renyi_alpha,
+            normalizer=RenyiNormalizer(args.renyi_normalizer),
+            nominal_vocab_size=args.nominal_vocab_size,
+        )
+        if args.renyi_alpha is not None
+        else None
+    )
+    tier1 = replace(tier1, corpus_level=CorpusMetrics(gini=gini, renyi=renyi, parity=parity))
     if tier1.parameters is None or tier1.corpus is None:
         raise RuntimeError("analyze() returned a report without its manifest fragments")
 

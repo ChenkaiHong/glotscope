@@ -105,6 +105,33 @@ def test_gini_costs_are_tokens_per_aligned_line() -> None:
     assert 0.0 <= result.value <= 1.0
 
 
+def test_gini_refuses_a_corpus_that_is_not_parallel() -> None:
+    with pytest.raises(CapabilityError, match="parallel"):
+        _report(capabilities=frozenset(), corpus_id="fineweb2").gini()
+
+
+def test_gini_refuses_a_single_language_report() -> None:
+    report = _report()
+    monolingual = Tier1Report(
+        per_language={"eng_Latn": report.per_language["eng_Latn"]},
+        corpus_level=CorpusMetrics(),
+        segmenter=None,
+        document_stats={"eng_Latn": report.document_stats["eng_Latn"]},
+        corpus=CorpusManifest(
+            id="flores_plus",
+            version="2024.08",
+            split="devtest",
+            languages=("eng_Latn",),
+            sha256="a" * 64,
+            capabilities=frozenset({Capability.PARALLEL}),
+            license="CC-BY-SA-4.0",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="at least two"):
+        monolingual.gini()
+
+
 def test_renyi_efficiency_is_computed_at_the_alpha_requested() -> None:
     report = _report()
 
@@ -192,6 +219,7 @@ def test_tier1_serialization_carries_every_optional_metric_that_ran() -> None:
         corpus_level=CorpusMetrics(
             gini=GiniResult(0.081, frozenset({"hin_Deva"}), "tokens_per_line"),
             renyi=RenyiResult(0.412, 2.5, RenyiNormalizer.OBSERVED, 9.1),
+            parity=_report().parity(reference="eng_Latn"),
         ),
         segmenter=Segmenter.STANZA,
     )
@@ -208,6 +236,8 @@ def test_tier1_serialization_carries_every_optional_metric_that_ran() -> None:
     assert document["corpus_level"]["renyi_alpha"] == 2.5
     assert document["corpus_level"]["renyi_normalizer"] == "observed"
     assert document["corpus_level"]["gini"] == 0.081
+    assert document["corpus_level"]["parity"]["reference_language"] == "eng_Latn"
+    assert document["corpus_level"]["parity"]["worst_case_parity"] == 1.5
 
 
 def test_gini_refuses_a_language_set_with_no_aligned_lines() -> None:
@@ -215,7 +245,16 @@ def test_gini_refuses_a_language_set_with_no_aligned_lines() -> None:
         per_language={},
         corpus_level=CorpusMetrics(),
         segmenter=None,
-        document_stats={"eng_Latn": _stats([])},
+        document_stats={"eng_Latn": _stats([]), "hin_Deva": _stats([])},
+        corpus=CorpusManifest(
+            id="flores_plus",
+            version="2024.08",
+            split="devtest",
+            languages=("eng_Latn", "hin_Deva"),
+            sha256="a" * 64,
+            capabilities=frozenset({Capability.PARALLEL}),
+            license="CC-BY-SA-4.0",
+        ),
     )
 
     with pytest.raises(ValueError, match="at least one line"):

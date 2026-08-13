@@ -120,13 +120,14 @@ def _tier0() -> Tier0Report:
         unreachable_tokens=(2,),
         special_tokens=(2, 3),
         byte_fallback_coverage=256,
+        non_utf8_byte_values=(),
     )
 
 
 def test_manifest_serializes_optional_tiers_and_contested_parameters() -> None:
     document = _manifest(with_optional_tiers=True).to_dict()
 
-    assert document["schema_version"] == "1.0"
+    assert document["schema_version"] == "1.1"
     assert document["backend"] == "python"
     assert document["manifest"]["tokenizer"] == {
         "id": "acme/tokenizer",
@@ -186,6 +187,12 @@ def test_canonical_json_is_sorted_compact_and_preserves_unicode() -> None:
     assert json.loads(canonical_json(document)) == document
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_canonical_json_refuses_nonfinite_numbers(value: float) -> None:
+    with pytest.raises(ValueError, match="Out of range"):
+        canonical_json({"metric": value})
+
+
 def test_warning_log_returns_new_values_without_mutating_prior_log() -> None:
     original = WarningLog()
     one_warning = original.with_warning("first")
@@ -212,6 +219,7 @@ def test_tier0_serialization_and_stage1_exclusions_are_precise() -> None:
         },
         "unreachable_count": 1,
         "byte_fallback_coverage": 256,
+        "non_utf8_byte_values": [],
     }
 
 

@@ -89,6 +89,38 @@ def test_lint_refuses_a_hub_identifier_as_unbuilt_rather_than_invalid(
     assert "from_pretrained" in capsys.readouterr().err
 
 
+def test_lint_reports_a_mistyped_path_as_a_refusal_not_as_unbuilt(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Exit 1, not 2. A typo in a path is a wrong argument; answering "scheduled
+    # for a later release" sends the reader looking for a feature when what they
+    # need is to fix the path.
+    assert main(["lint", str(tmp_path / "typo.json")]) == 1
+
+    captured = capsys.readouterr()
+    assert "from_pretrained" not in captured.err
+    assert "typo.json" in captured.err
+
+
+def test_lint_reads_a_tokenizer_json_out_of_a_directory(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A local checkout of a model directory is a legitimate local source: the
+    # file it holds is the same artifact, so refusing it as "needs
+    # from_pretrained" reports an unbuilt feature for something already built.
+    _tokenizer_json(tmp_path)
+
+    assert main(["lint", str(tmp_path)]) == 0
+    assert json.loads(capsys.readouterr().out)["vocab_size"] == 256
+
+
+def test_lint_reports_a_directory_without_a_tokenizer_json_as_a_refusal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["lint", str(tmp_path)]) == 1
+    assert "tokenizer.json" in capsys.readouterr().err
+
+
 def test_lint_refuses_a_revision_it_cannot_resolve(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["lint", "tokenizer.json", "--revision", "a" * 40]) == 2
     assert "revision" in capsys.readouterr().err
@@ -122,6 +154,31 @@ def test_analyze_writes_to_stdout_when_no_output_path_is_given(
 
     document = json.loads(capsys.readouterr().out)
     assert document["tier1"]["per_language"]["hin_Deva"]["bpt"] == pytest.approx(1.0)
+
+
+def test_analyze_serializes_requested_corpus_metrics(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _flores(tmp_path)
+
+    assert (
+        main(
+            _analyze_argv(
+                tmp_path,
+                "--parity-reference",
+                "eng_Latn",
+                "--gini",
+                "--renyi-alpha",
+                "2.5",
+            )
+        )
+        == 0
+    )
+
+    corpus_level = json.loads(capsys.readouterr().out)["tier1"]["corpus_level"]
+    assert corpus_level["parity"]["reference_language"] == "eng_Latn"
+    assert "gini" in corpus_level
+    assert corpus_level["renyi_alpha"] == 2.5
 
 
 def test_the_leading_space_convention_can_actually_be_switched_off(

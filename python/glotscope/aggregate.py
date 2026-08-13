@@ -74,6 +74,24 @@ class DocumentStats:
     normalization can strip a document to nothing (U+00AD, U+200B, some ZWJ and
     RTL marks) and §12.2 requires these be reported separately."""
 
+    @classmethod
+    def combine(cls, parts: Sequence[DocumentStats]) -> DocumentStats:
+        """Associatively combine chunk folds while preserving input chunk order."""
+        counts: Counter[int] = Counter()
+        for part in parts:
+            counts.update(part.type_counts)
+        return cls(
+            n_documents=sum(part.n_documents for part in parts),
+            total_tokens=sum(part.total_tokens for part in parts),
+            total_chars=sum(part.total_chars for part in parts),
+            total_bytes=sum(part.total_bytes for part in parts),
+            type_counts=MappingProxyType(dict(counts)),
+            per_document_tokens=tuple(
+                count for part in parts for count in part.per_document_tokens
+            ),
+            n_empty_documents=sum(part.n_empty_documents for part in parts),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class WordStats:
