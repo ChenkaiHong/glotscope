@@ -24,7 +24,7 @@ from tokenizers import decoders, models, pre_tokenizers
 from glotscope import __version__, backend
 from glotscope.corpus import Corpus, LoadedCorpus
 from glotscope.enums import Capability, Normalization, Segmenter
-from glotscope.errors import CapabilityError, SegmenterRequiredError
+from glotscope.errors import CapabilityError, SegmenterRequiredError, UnkRateExceededError
 from glotscope.lint import byte_to_unicode
 from glotscope.manifest import Manifest, canonical_json, environment
 from glotscope.report import Report
@@ -232,11 +232,54 @@ def test_ud_gold_is_refused_on_a_corpus_without_gold_word_boundaries(tmp_path: P
 
 
 def test_a_segmenter_that_cannot_run_yet_is_refused_rather_than_recorded(tmp_path: Path) -> None:
-    # The segmenter adapters are not built. Recording a segmenter that never ran
-    # would put a false claim in the manifest, and returning an empty fertility
-    # mapping would be the silently-plausible wrong answer D6 exists to prevent.
-    with pytest.raises(NotImplementedError, match="segmenter"):
+    # Stanza and UDPipe segment with a downloaded model, and how that model is
+    # pinned and recorded is undecided — a silent download on first use would
+    # put an unrecorded artifact behind a published number. Recording a
+    # segmenter that never ran would be a false claim in the manifest, and an
+    # empty fertility mapping the silently-plausible wrong answer D6 prevents.
+    with pytest.raises(NotImplementedError, match="pinned model"):
         _tokenizer(tmp_path).analyze(_parallel(tmp_path), segmenter=Segmenter.STANZA)
+
+
+def test_a_language_the_tokenizer_cannot_represent_is_dropped(tmp_path: Path) -> None:
+    """§7.1 rule 6, exercised through ``analyze`` rather than only in isolation.
+
+    The byte-level fixture everything else here uses has no ``[UNK]`` at all —
+    every byte is representable — so the exclusion rule could never fire against
+    it and the wiring would go untested. This uses a WordPiece vocabulary that
+    covers two English words and nothing else, which is the shape of tokenizer
+    the rule was written for: FlanT5 fails it on 42% of FLORES-200 languages.
+    """
+    backend_tokenizer = BackendTokenizer(
+        models.WordPiece(vocab={"[UNK]": 0, "the": 1, "cat": 2}, unk_token="[UNK]")
+    )
+    backend_tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+    path = tmp_path / "wordpiece.json"
+    backend_tokenizer.save(str(path))
+    tokenizer = Tokenizer.from_file(path)
+
+    corpus = Corpus.fineweb2(version=_SAMPLE, languages=["hin_Deva"])
+    directory = tmp_path / corpus.spec.id / corpus.version / corpus.split
+    directory.mkdir(parents=True)
+    (directory / "hin_Deva.txt").write_text("\n".join(_HINDI) + "\n", encoding="utf-8")
+
+    with pytest.raises(UnkRateExceededError, match="hin_Deva"):
+        tokenizer.analyze(corpus.load(tmp_path), segmenter=Segmenter.WHITESPACE)
+
+
+def test_a_built_segmenter_produces_fertility(tmp_path: Path) -> None:
+    # Whitespace needs no extra, so this runs everywhere the core install does.
+    # It is the wiring test: an adapter with nothing consuming it is untested by
+    # construction, which is how the CLI defects earlier in this milestone got in.
+    report = _tokenizer(tmp_path).analyze(_parallel(tmp_path), segmenter=Segmenter.WHITESPACE)
+
+    assert set(report.fertility) == {"eng_Latn", "hin_Deva"}
+    assert all(value > 0 for value in report.fertility.values())
+    english = report.per_language["eng_Latn"].fertility
+    assert english is not None
+    assert english.segmenter is Segmenter.WHITESPACE
+    # No model applies, so none is pinned — the one case where null is legal.
+    assert english.segmenter_model_version is None
 
 
 def test_a_run_assembles_into_a_result_document(tmp_path: Path) -> None:
