@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -55,10 +55,20 @@ __all__ = [
     "TokenCandidate",
 ]
 
-_NO_STATS: Mapping[str, DocumentStats] = MappingProxyType({})
-"""Shared empty default. A read-only mapping rather than a fresh ``dict`` per
-instance: these reports are frozen, and a mutable default would be the one way
-to change a result after it was produced."""
+
+def _no_stats() -> Mapping[str, DocumentStats]:
+    """The empty default, as a factory rather than as a shared constant.
+
+    A read-only mapping rather than a fresh ``dict``: these reports are frozen,
+    and a mutable default would be the one way to change a result after it was
+    produced. It has to be a ``default_factory`` because ``dataclasses`` on
+    Python 3.10 and 3.11 rejects any default whose ``__hash__`` is ``None``, and
+    ``mappingproxy``'s is — 3.12 relaxed the check to list/dict/set only.
+    Assigning the constant directly imports fine on 3.13 and fails half the CI
+    matrix at import time, which is the shape of bug the 12-cell matrix exists
+    to catch.
+    """
+    return MappingProxyType({})
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,7 +146,7 @@ class Tier1Report:
 
     warnings: tuple[str, ...] = ()
 
-    document_stats: Mapping[str, DocumentStats] = _NO_STATS
+    document_stats: Mapping[str, DocumentStats] = field(default_factory=_no_stats)
     """Folded statistics per language, kept so the corpus-level metrics can be
     *computed* rather than looked up. ``alpha`` is chosen at call time in §8.1,
     and a report storing only a finished Renyi number could not answer a second

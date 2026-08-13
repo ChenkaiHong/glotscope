@@ -34,6 +34,17 @@ uv run --no-sync pytest tests/test_renyi.py -q
 uv run --no-sync pytest -m "reference and not network and not gated" -q
 ```
 
+The local venv is 3.13, and **the floor is where the version-dependent failures are**. Before pushing
+anything that touches a dataclass default, a stdlib call, or a typing construct, run the floor too:
+
+```bash
+uv run --python 3.10 --isolated --with-editable ".[dev]" pytest -q
+```
+
+A `MappingProxyType` dataclass default cost a full red matrix this way: `dataclasses` rejects any
+default whose `__hash__` is `None` on 3.10/3.11, and 3.12 relaxed the check. Green on 3.13, `ValueError`
+at import time on half the cells.
+
 Markers (`--strict-markers` is on, so an unregistered marker is an error): `reference`, `property`, `segmenter`, `gated`, `network`.
 
 Packaging — never build or upload by hand; the `Makefile` chains the guards:
