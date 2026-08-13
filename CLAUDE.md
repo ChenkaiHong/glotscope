@@ -23,7 +23,7 @@ uv run --no-sync mypy --strict python/glotscope tests
 uv run --no-sync pytest --cov=glotscope --cov-report=term-missing -q   # gate: 85%
 ```
 
-Baseline as of 12 Aug 2026: **219 tests pass, 97.49% coverage**, ruff/format/mypy clean. Coverage below 85% fails the run, so `--cov` is not optional when judging a change.
+Baseline as of 12 Aug 2026: **227 tests pass, 97.49% coverage**, ruff/format/mypy clean. Coverage below 85% fails the run, so `--cov` is not optional when judging a change.
 
 `.[dev]` installs the extras too. The **core install is `tokenizers` alone** — `numpy`/`safetensors` are the `tier2` extra and `tiktoken` is its own, because G1's clean-install promise is measured on a core install that only claims Tier 0 and Tier 1. Import either inside the function that needs it and name the extra when it is missing.
 
@@ -211,6 +211,6 @@ Grep the PRD rather than re-reading 77 KB:
 
 Milestones have **binary** exit criteria (§15) — nothing is done on judgment. Ship order is front-loaded: **v0.1.0 to PyPI at M1 (18 Sep 2026)**, before the paper and before Rust (D15). Under schedule pressure the cut order is fixed: **M5 (Rust) → extended language set → HF Space → M4 model count (floor 8) →** *never* M1 or M2.
 
-The four cheapest high-value tests are **done** (Zouhar Rényi pair at 1e-9, hand-built UTF-8 vocabulary, `parity_L(L) = 1.0`, `Gini([1,2,3,4,5]) == 4/15`), as is the PyPI reservation. Next work is selected from the frozen order in `docs/build-order.md`: Tier 0 (`lint.py`, `Tokenizer.from_*`) needs no external data and is the head of the queue; Tier 1 segmenter-free work needs FLORES+ (gated), and Tier 1 word-level work needs the segmenter extras.
+Five §12.1 rows are **done** (Zouhar Rényi pair at 1e-9, hand-built UTF-8 vocabulary, `parity_L(L) = 1.0`, `Gini([1,2,3,4,5]) == 4/15`, and §7.2's compression family against TokEval at 1e-6), as is the PyPI reservation. Next work is selected from the frozen order in `docs/build-order.md`: Tier 0 (`lint.py`, `Tokenizer.from_*`) needs no external data and is the head of the queue; Tier 1 segmenter-free work needs FLORES+ (gated), and Tier 1 word-level work needs the segmenter extras.
 
 Branch per task off `origin/foundation`, and do not push to `foundation` directly — the reviewed history goes through PRs.

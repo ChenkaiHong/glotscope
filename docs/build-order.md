@@ -93,6 +93,13 @@ Completed in the original value-per-unit-of-blocked-ness order:
    but it catches the dropped-line bug that silently breaks the ratio-of-means identity.
 4. **`Gini([1,2,3,4,5]) == 4/15`** as a hard-coded value, plus the `in [0,1]` range check. The range
    check is the one that catches a descending sort; order-invariance does not.
+5. **The §7.2 compression family against TokEval** (§12.1, tolerance 1e-6). The first row checked
+   against a *second implementation* rather than against a published number or a constructed
+   expectation: the pinned revision was executed on a fixed corpus and its output recorded.
+   Re-deriving the expectation from the same source lines that produced `compression.py` would have
+   been an oracle written by the model it is meant to falsify. Two clauses discriminate — the
+   blank-text exclusion, and ratio-of-totals against mean-of-per-document-ratios — and the corpus was
+   chosen so at least one language separates each.
 
 The PyPI name was reserved on 10 August 2026.
 
