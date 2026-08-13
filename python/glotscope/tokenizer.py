@@ -9,20 +9,26 @@ from __future__ import annotations
 
 import hashlib
 import json
+import unicodedata
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Literal
 
 from tokenizers import Tokenizer as BackendTokenizer
 
-from glotscope.enums import Algorithm, Normalization, Segmenter
+from glotscope.aggregate import DocumentStats, aggregate_documents
+from glotscope.compression import compression
+from glotscope.corpus import Corpus, LoadedCorpus
+from glotscope.enums import Algorithm, Capability, Normalization, Segmenter
 from glotscope.errors import TokenizerLoadError
 from glotscope.lint import detect_algorithm, lint_backend
-from glotscope.manifest import TokenizerManifest
+from glotscope.manifest import ParameterManifest, TokenizerManifest
 from glotscope.report import Tier0Report, Tier1Report, Tier2Report
+from glotscope.results import CorpusMetrics, LanguageMetrics
+from glotscope.roundtrip import roundtrip_matches_from_ids
 
 if TYPE_CHECKING:
-    from glotscope.corpus import Corpus
     from glotscope.embeddings import Embeddings
 
 __all__ = ["Tokenizer"]
@@ -46,6 +52,82 @@ _UNKNOWN_ALGORITHM_WARNING = (
     "algorithm could not be identified from tokenizer.json and is recorded as "
     "'unknown'; §7.9 is validated on BPE only"
 )
+_NO_NORMALIZATION_WARNING = (
+    "normalization is switched off: CPT, STRR and round-trip losslessness are "
+    "all sensitive to Unicode form, so these numbers are comparable only against "
+    "another run over identically encoded text"
+)
+
+_ANALYSIS_BATCH_SIZE = 8192
+"""Maximum documents whose normalized text and encodings are live together."""
+
+_UNICODE_FORMS: dict[Normalization, Literal["NFC", "NFD", "NFKC", "NFKD"]] = {
+    Normalization.NFC: "NFC",
+    Normalization.NFD: "NFD",
+    Normalization.NFKC: "NFKC",
+    Normalization.NFKD: "NFKD",
+}
+
+
+def _normalized(text: str, form: Normalization) -> str:
+    """Apply the recorded Unicode form; :attr:`Normalization.NONE` passes through."""
+    unicode_form = _UNICODE_FORMS.get(form)
+    if unicode_form is None:
+        return text
+    return unicodedata.normalize(unicode_form, text)
+
+
+def _empty_document_warning(language: str, count: int) -> str:
+    return (
+        f"{language}: {count} document(s) encoded to zero tokens. They are counted "
+        f"in the corpus totals and excluded from the compression rate, never "
+        f"silently dropped — normalization alone can strip a document to nothing "
+        f"(§12.2)"
+    )
+
+
+def _require_loaded(corpus: LoadedCorpus | Corpus) -> LoadedCorpus:
+    """Insist on a corpus that has actually been read (D12).
+
+    glotscope ships no corpora, so a bare :class:`~glotscope.corpus.Corpus` is a
+    description of something on disk rather than the thing itself. Refusing here
+    also guarantees the digest in the manifest and the numbers in the report
+    describe the same bytes.
+    """
+    if isinstance(corpus, LoadedCorpus):
+        return corpus
+    raise ValueError(
+        f"corpus {corpus.spec.id!r} carries no text. glotscope ships no corpora "
+        f"(D12): call corpus.load(root) on a local download — the recipe is on "
+        f"its registry entry — and pass what that returns."
+    )
+
+
+def _reject_unrunnable_segmenter(segmenter: Segmenter | None, corpus: Corpus) -> None:
+    """Refuse a segmenter this build cannot honour (PRD §7.1, D6).
+
+    The capability check comes first and is permanent: ``UD_GOLD`` against a
+    corpus without gold word boundaries is a
+    :class:`~glotscope.errors.CapabilityError` no matter what is implemented,
+    because applying "UD segmentation" to arbitrary text is a different
+    operation performed by a trained model with its own per-language accuracy
+    and its own version (§7.1 rule 1).
+
+    The refusal that follows is temporary and tracks the segmenter adapters,
+    which are packaged as optional extras and not yet written.
+    """
+    if segmenter is None:
+        return
+    if segmenter.requires_gold_segmentation:
+        corpus.require(Capability.WORD_SEGMENTATION, "fertility")
+    raise NotImplementedError(
+        f"the {segmenter.value!r} segmenter adapter is not implemented, so no "
+        f"word-level metric can run. Pass segmenter=None for the segmenter-free "
+        f"Tier 1 metrics. Accepting the argument and recording it anyway would "
+        f"put a claim in the manifest that nothing performed, and an empty "
+        f"fertility mapping would be the silently plausible wrong answer D6 "
+        f"exists to prevent."
+    )
 
 
 class Tokenizer:
@@ -126,6 +208,11 @@ class Tokenizer:
         with no weights, so Tier 2 is unavailable. Roughly half the §11 core tier
         is in this position, which is why the leaderboard must mark the Tier 2
         column ``n/a (tokenizer-only)`` rather than leaving it visually empty.
+
+        ``tiktoken`` is the ``tiktoken`` extra rather than a core dependency.
+        Import it inside this method and name the extra when it is missing: an
+        unguarded top-level import would make every core install carry a second
+        tokenizer library in order to reach ``from_file``.
         """
         raise NotImplementedError
 
@@ -216,27 +303,48 @@ class Tokenizer:
 
     def analyze(
         self,
-        corpus: Corpus,
+        corpus: LoadedCorpus | Corpus,
         *,
         leading_space: bool = True,
-        normalization: Normalization = Normalization.NFC,
+        normalization: Normalization | str = Normalization.NFC,
         add_special_tokens: bool = False,
         segmenter: Segmenter | None = None,
         segmenter_model_version: str | None = None,
     ) -> Tier1Report:
         """Tier 1: corpus-based metrics (PRD §7.1-§7.7, §8.1).
 
+        Encodes each language once, folds the batch across the §13 aggregation
+        boundary, and returns the per-language compression family and round-trip
+        rate together with the folded statistics themselves. The corpus-level
+        metrics are deliberately *not* computed here: §8.1 spells them
+        ``t1.parity(reference=...)``, ``t1.gini()`` and
+        ``t1.renyi_efficiency(alpha=...)``, and alpha in particular is a
+        parameter of the question rather than of the run — a report holding one
+        finished Renyi number could not answer a second alpha without
+        re-encoding the corpus.
+
         ``segmenter`` defaults to ``None``, which is legal: parity, Gini, Renyi and
         the compression family are segmenter-free, and §14.3 step 1 runs parity
         over all 229 FLORES+ varieties precisely because it costs nothing.
         Word-level metrics then raise :class:`SegmenterRequiredError` on access
-        rather than silently picking a convention (D6).
+        rather than silently picking a convention (D6). Passing a segmenter
+        currently raises :class:`NotImplementedError`, because the adapters ship
+        as optional extras that do not exist yet and recording a segmenter that
+        never ran would put a false claim in the manifest.
 
         ``leading_space`` defaults to ``True`` for byte-level BPE per §7.1 rule 5,
         and is recorded either way. It can move STRR by tens of points.
 
         ``normalization`` is recorded because NFKC versus NFC shifts CPT, STRR and
-        round-trip losslessness.
+        round-trip losslessness. It is applied *before* anything is measured, and
+        round-trip is scored against the normalized text — comparing a normalized
+        encoding against unnormalized source would report a failure caused by the
+        pipeline rather than by the tokenizer.
+
+        Args:
+            corpus: a :class:`~glotscope.corpus.LoadedCorpus`. A bare
+                :class:`~glotscope.corpus.Corpus` is refused: glotscope ships no
+                corpora (D12), so an unloaded one carries no text.
 
         Raises:
             CapabilityError: if ``segmenter`` is
@@ -244,8 +352,85 @@ class Tokenizer:
                 declare gold word segmentation. Applying "UD segmentation" to
                 arbitrary text requires a trained model with its own per-language
                 accuracy and its own version, which is a different operation.
+            NotImplementedError: if any segmenter is requested.
+            ValueError: if the corpus was never loaded, resolved to no languages,
+                or holds no documents for a language it names.
         """
-        raise NotImplementedError
+        normalization = Normalization(normalization)
+        loaded = _require_loaded(corpus)
+        _reject_unrunnable_segmenter(segmenter, loaded.corpus)
+        if not loaded.lines:
+            raise ValueError(
+                f"corpus {loaded.corpus.spec.id!r} resolved to no languages, so "
+                f"there is nothing to measure"
+            )
+
+        warnings: list[str] = []
+        if normalization is Normalization.NONE:
+            warnings.append(_NO_NORMALIZATION_WARNING)
+
+        per_language: dict[str, LanguageMetrics] = {}
+        document_stats: dict[str, DocumentStats] = {}
+        for language, documents in loaded.lines.items():
+            if not documents:
+                raise ValueError(
+                    f"corpus {loaded.corpus.spec.id!r} holds no documents for "
+                    f"{language!r}, and every Tier 1 ratio divides by a corpus total"
+                )
+            chunks: list[DocumentStats] = []
+            byte_lengths: list[int] = []
+            is_blank: list[bool] = []
+            roundtrip_matches = 0
+            for start in range(0, len(documents), _ANALYSIS_BATCH_SIZE):
+                texts = [
+                    _normalized(document, normalization)
+                    for document in documents[start : start + _ANALYSIS_BATCH_SIZE]
+                ]
+                chunk_bytes = [len(text.encode("utf-8")) for text in texts]
+                token_ids = [
+                    encoding.ids
+                    for encoding in self._backend.encode_batch(
+                        texts, add_special_tokens=add_special_tokens
+                    )
+                ]
+                chunks.append(
+                    aggregate_documents(
+                        token_ids,
+                        char_lengths=[len(text) for text in texts],
+                        byte_lengths=chunk_bytes,
+                    )
+                )
+                byte_lengths.extend(chunk_bytes)
+                is_blank.extend(not text.strip() for text in texts)
+                matched, _ = roundtrip_matches_from_ids(self._backend, texts, token_ids)
+                roundtrip_matches += matched
+            stats = DocumentStats.combine(chunks)
+            if stats.n_empty_documents:
+                warnings.append(_empty_document_warning(language, stats.n_empty_documents))
+            document_stats[language] = stats
+            per_language[language] = LanguageMetrics(
+                language=language,
+                compression=compression(
+                    stats, unit_lengths=byte_lengths, is_blank=is_blank, language=language
+                ),
+                roundtrip_rate=roundtrip_matches / stats.n_documents,
+            )
+
+        return Tier1Report(
+            per_language=MappingProxyType(per_language),
+            corpus_level=CorpusMetrics(),
+            segmenter=segmenter,
+            warnings=tuple(warnings),
+            document_stats=MappingProxyType(document_stats),
+            corpus=loaded.corpus.to_manifest(),
+            parameters=ParameterManifest(
+                leading_space=leading_space,
+                normalization=normalization,
+                add_special_tokens=add_special_tokens,
+                segmenter=segmenter,
+                segmenter_model_version=segmenter_model_version,
+            ),
+        )
 
     def detect_undertrained(
         self,

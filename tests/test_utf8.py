@@ -34,7 +34,9 @@ def test_hand_built_vocab_classification_and_stage1() -> None:
 def test_utf8_classifier_distinguishes_invalid_from_truncated() -> None:
     assert classify_utf8_token("é".encode()) is TokenClass.WELL_FORMED
     assert classify_utf8_token(b"\xe2\x82") is TokenClass.PARTIAL_UTF8
-    assert classify_utf8_token(b"\x80") is TokenClass.ILL_FORMED_NOT_PARTIAL
+    assert classify_utf8_token(b"\x80") is TokenClass.PARTIAL_UTF8
+    assert classify_utf8_token(b"\xc0") is TokenClass.ILL_FORMED_NOT_PARTIAL
+    assert classify_utf8_token(b"\xe0\x80\x80") is TokenClass.PARTIAL_UTF8
 
 
 def test_utf8_report_rejects_empty_vocab() -> None:

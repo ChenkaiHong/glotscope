@@ -71,12 +71,16 @@ divergence and why. A documented divergence is a contribution; a silently tuned 
 ## Install
 
 ```bash
-pip install glotscope                 # core: Tier 0, Tier 1, Tier 2
+pip install glotscope                 # core: Tier 0 and Tier 1
+pip install "glotscope[tier2]"        # + reading embedding tensors
+pip install "glotscope[tiktoken]"     # + OpenAI encodings by name
 pip install "glotscope[segmenters]"   # optional word segmenters
 ```
 
-Python 3.10–3.13, Linux/macOS/Windows. Segmenters are optional extras because MeCab needs a native
-build and PyICU needs system ICU; the core install has no such requirement.
+Python 3.10–3.13, Linux/macOS/Windows. The core install is one dependency, because every tier past
+the first two costs a dependency tree the user may not need: Tier 2 reads `safetensors` shards as
+arrays, and `tiktoken` is a second tokenizer library. Segmenters are separate again because MeCab
+needs a native build and PyICU needs system ICU; the core install has no such requirement.
 
 ## Development
 

@@ -5,28 +5,62 @@ from __future__ import annotations
 import math
 from collections import Counter
 from collections.abc import Hashable, Mapping, Sequence
+from typing import TypeVar
 
 from glotscope.enums import RenyiNormalizer
 from glotscope.results import GiniResult, ParityResult, RenyiResult, sorted_costs
 
-__all__ = ["gini", "parity", "renyi_efficiency"]
+__all__ = ["gini", "parity", "renyi_efficiency", "renyi_efficiency_from_counts"]
+
+_TokenType = TypeVar("_TokenType", bound=Hashable)
+"""Whatever the caller counts by — token ids from the fold, token strings from a
+sequence. ``Mapping`` is invariant in its key type, so a bare ``Hashable`` key
+would reject the ``Counter[int]`` the aggregation layer produces."""
 
 
 def renyi_efficiency(
     tokens: Sequence[Hashable],
     *,
     alpha: float,
-    normalizer: RenyiNormalizer = RenyiNormalizer.OBSERVED,
+    normalizer: RenyiNormalizer | str = RenyiNormalizer.OBSERVED,
     nominal_vocab_size: int | None = None,
 ) -> RenyiResult:
     """Compute Rényi entropy and efficiency over a token sequence (PRD §7.5)."""
     if not tokens:
         raise ValueError("Rényi efficiency requires at least one token")
-    if alpha <= 0.0:
-        raise ValueError("alpha must be positive")
 
-    counts = Counter(tokens)
+    return renyi_efficiency_from_counts(
+        Counter(tokens),
+        alpha=alpha,
+        normalizer=normalizer,
+        nominal_vocab_size=nominal_vocab_size,
+    )
+
+
+def renyi_efficiency_from_counts(
+    counts: Mapping[_TokenType, int],
+    *,
+    alpha: float,
+    normalizer: RenyiNormalizer | str = RenyiNormalizer.OBSERVED,
+    nominal_vocab_size: int | None = None,
+) -> RenyiResult:
+    """Compute Rényi efficiency from a token-type frequency distribution (§7.5).
+
+    The distribution is the only input the formula needs, and it is what
+    :class:`~glotscope.aggregate.DocumentStats` already carries. Taking counts
+    directly avoids materializing a corpus-sized token sequence purely to count
+    it again — across 229 FLORES+ varieties that is the difference between a
+    fold and a re-encode.
+    """
+    normalizer = RenyiNormalizer(normalizer)
+    if not math.isfinite(alpha) or alpha <= 0.0:
+        raise ValueError("alpha must be positive")
+    if any(count <= 0 for count in counts.values()):
+        raise ValueError("type counts must be positive")
+
     total = sum(counts.values())
+    if total == 0:
+        raise ValueError("Rényi efficiency requires at least one token")
     probabilities = tuple(count / total for count in counts.values())
 
     if alpha == 1.0:
@@ -50,6 +84,7 @@ def renyi_efficiency(
         alpha=alpha,
         normalizer=normalizer,
         entropy_bits=entropy_bits,
+        nominal_vocab_size=nominal_vocab_size if normalizer is RenyiNormalizer.NOMINAL else None,
     )
 
 

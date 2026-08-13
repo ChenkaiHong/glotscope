@@ -10,6 +10,13 @@ L2-norm indicator, which is the exact signal Tier 2 depends on, and community
 mirrors routinely republish 4-bit, GGUF or merged variants under near-identical
 names. §11's mirror mitigation was written for tokenizers and is insufficient
 here — so dtype is checked, recorded, and refused rather than warned about.
+
+``safetensors`` and ``numpy`` are the ``tier2`` extra rather than core
+dependencies: a core install promises Tier 0 and Tier 1, and G1's clean-install
+claim is measured on it. Import them inside the function that needs them and
+raise a message naming the extra — an unguarded top-level import would surface a
+bare ``ModuleNotFoundError``, which reads as a broken package rather than as an
+install that never included this tier.
 """
 
 from __future__ import annotations

@@ -15,8 +15,10 @@ from collections.abc import Iterable
 
 __all__ = [
     "CapabilityError",
+    "CorpusIntegrityError",
     "GlotscopeError",
     "IncomparableError",
+    "LicenseError",
     "NoReferenceSetError",
     "SegmenterRequiredError",
     "TokenizerLoadError",
@@ -26,6 +28,44 @@ __all__ = [
 
 class GlotscopeError(Exception):
     """Base class for every refusal glotscope raises deliberately."""
+
+
+class CorpusIntegrityError(GlotscopeError):
+    """The corpus on disk is not the corpus the run claims to have used (§10.4).
+
+    Covers a digest mismatch, a missing language file, and unequal line counts
+    across a corpus that declares itself parallel. All three produce numbers
+    that look exactly like a successful run: the first makes every result
+    unreproducible under a manifest that says otherwise, the second silently
+    narrows the language set, and the third breaks the identity that makes
+    parity a ratio of means (§7.3, D7).
+    """
+
+    def __init__(self, corpus_id: str, reason: str) -> None:
+        self.corpus_id = corpus_id
+        self.reason = reason
+        super().__init__(f"corpus {corpus_id!r} failed its integrity check: {reason}")
+
+
+class LicenseError(GlotscopeError):
+    """A resource was excluded by the active license filter (PRD §10.4).
+
+    Not an error in the resource — a refusal to use it under the terms the
+    caller asked for. `--license-filter=commercial` exists because an unknown
+    subset of UD is CC BY-NC-SA 4.0 and Europarl is research-only, and finding
+    that out after publishing a commercial evaluation is the expensive order to
+    discover it in.
+    """
+
+    def __init__(self, corpus_id: str, license_name: str, license_filter: str) -> None:
+        self.corpus_id = corpus_id
+        self.license_name = license_name
+        self.license_filter = license_filter
+        super().__init__(
+            f"corpus {corpus_id!r} is licensed {license_name!r}, which the "
+            f"{license_filter!r} license filter excludes. Drop the filter to use "
+            f"it, and check the terms yourself before relying on the result."
+        )
 
 
 class TokenizerLoadError(GlotscopeError):

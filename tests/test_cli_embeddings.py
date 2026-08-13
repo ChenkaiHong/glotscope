@@ -34,26 +34,13 @@ def test_cli_without_a_command_prints_help_and_returns_nonzero(
 @pytest.mark.parametrize(
     ("argv", "command", "milestone"),
     [
-        (["lint", "acme/tokenizer"], "lint", "M1 (Tier 0)"),
-        (
-            [
-                "analyze",
-                "acme/tokenizer",
-                "--corpus",
-                "flores_plus",
-                "--languages",
-                "eng_Latn,hin_Deva",
-            ],
-            "analyze",
-            "M1 (Tier 1)",
-        ),
         (["detect", "acme/tokenizer", "--weights", "weights.safetensors"], "detect", "M2 (Tier 2)"),
         (["compare", "one", "two", "--metric", "parity"], "compare", "M1"),
         (["leaderboard", "--config", "board.toml", "--out", "board.json"], "leaderboard", "M3"),
         (["verify", "result.json"], "verify", "M1 — the CI job that delivers G4"),
     ],
 )
-def test_each_declared_subcommand_refuses_cleanly_until_implemented(
+def test_each_unbuilt_subcommand_refuses_cleanly(
     argv: list[str],
     command: str,
     milestone: str,

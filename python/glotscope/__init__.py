@@ -28,7 +28,7 @@ import os
 from importlib.metadata import PackageNotFoundError, version
 
 from glotscope.aggregate import BoundaryCounts, DocumentStats, WordStats
-from glotscope.corpus import Corpus
+from glotscope.corpus import Corpus, LoadedCorpus
 from glotscope.embeddings import Embeddings
 from glotscope.enums import (
     Algorithm,
@@ -53,7 +53,7 @@ from glotscope.errors import (
     TokenizerLoadError,
     UnsupportedCheckpointError,
 )
-from glotscope.manifest import Manifest
+from glotscope.manifest import Manifest, environment
 from glotscope.report import Report, Tier0Report, Tier1Report, Tier2Report, TokenCandidate
 from glotscope.results import (
     CompressionResult,
@@ -82,6 +82,7 @@ __all__ = [
     "GlotscopeError",
     "IncomparableError",
     "Indicator",
+    "LoadedCorpus",
     "Manifest",
     "MorphologicalType",
     "MorphologyResult",
@@ -107,6 +108,7 @@ __all__ = [
     "WordStats",
     "__version__",
     "backend",
+    "environment",
 ]
 
 try:

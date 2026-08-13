@@ -1,5 +1,8 @@
 .PHONY: clean build leak-check twine-check upload
 
+SHELL := /bin/bash
+.SHELLFLAGS := -eu -o pipefail -c
+
 REPOSITORY ?= testpypi
 
 clean:
@@ -9,8 +12,10 @@ build: clean
 	uv build --out-dir dist
 
 leak-check: build
-	@members="$$(unzip -Z1 dist/*.whl; tar -tzf dist/*.tar.gz)"; \
-	if printf '%s\n' "$$members" | rg -q '(^|/)(glotscope-PRD\.md|HISTORY\.md|\.env|[^/]+\.(pem|key)|__pycache__/|[^/]+\.py[co])$$'; then \
+	@command -v unzip >/dev/null; \
+	members="$$(unzip -Z1 dist/*.whl; tar -tzf dist/*.tar.gz)"; \
+	test -n "$$members"; \
+	if printf '%s\n' "$$members" | grep -E -q '(^|/)(glotscope-PRD\.md|HISTORY\.md|\.env($|\.)|[^/]+\.(pem|key|p12|pfx)|id_(rsa|dsa|ecdsa|ed25519)|\.netrc|\.pypirc|\.npmrc|\.ipynb_checkpoints/|[^/]+(~|\.sw[op])|\.git/|\.venv/|\.DS_Store|PROGRESS\.md|__pycache__/|[^/]+\.py[co])$$'; then \
 		printf '%s\n' "Internal or sensitive path found in release artifacts" >&2; \
 		exit 1; \
 	fi

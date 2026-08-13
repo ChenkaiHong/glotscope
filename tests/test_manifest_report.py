@@ -27,9 +27,26 @@ from glotscope.manifest import (
     WarningLog,
     WeightsManifest,
     canonical_json,
+    environment,
 )
 from glotscope.report import Report, Tier0Report, Tier1Report, Tier2Report, TokenCandidate
 from glotscope.results import CompressionResult, CorpusMetrics, FertilityResult, LanguageMetrics
+
+
+def test_the_environment_is_captured_without_machine_specific_detail() -> None:
+    import platform as platform_module
+
+    captured = environment()
+
+    # A family string, not platform.platform(): the latter embeds kernel build
+    # numbers, so two machines producing identical numbers would produce
+    # different manifests and G4's bit-identical assertion would never be green.
+    assert captured.platform == captured.platform.lower()
+    assert " " not in captured.platform
+    assert captured.python == platform_module.python_version()
+    assert captured.tokenizers
+    # Nothing here may vary between two calls in one process.
+    assert captured == environment()
 
 
 def _manifest(*, with_optional_tiers: bool = False) -> Manifest:
@@ -103,13 +120,14 @@ def _tier0() -> Tier0Report:
         unreachable_tokens=(2,),
         special_tokens=(2, 3),
         byte_fallback_coverage=256,
+        non_utf8_byte_values=(),
     )
 
 
 def test_manifest_serializes_optional_tiers_and_contested_parameters() -> None:
     document = _manifest(with_optional_tiers=True).to_dict()
 
-    assert document["schema_version"] == "1.0"
+    assert document["schema_version"] == "1.1"
     assert document["backend"] == "python"
     assert document["manifest"]["tokenizer"] == {
         "id": "acme/tokenizer",
@@ -169,6 +187,12 @@ def test_canonical_json_is_sorted_compact_and_preserves_unicode() -> None:
     assert json.loads(canonical_json(document)) == document
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_canonical_json_refuses_nonfinite_numbers(value: float) -> None:
+    with pytest.raises(ValueError, match="Out of range"):
+        canonical_json({"metric": value})
+
+
 def test_warning_log_returns_new_values_without_mutating_prior_log() -> None:
     original = WarningLog()
     one_warning = original.with_warning("first")
@@ -195,6 +219,7 @@ def test_tier0_serialization_and_stage1_exclusions_are_precise() -> None:
         },
         "unreachable_count": 1,
         "byte_fallback_coverage": 256,
+        "non_utf8_byte_values": [],
     }
 
 
@@ -234,22 +259,25 @@ def test_tier1_fertility_requires_a_segmenter_and_omits_uncomputed_languages() -
     assert with_segmenter.fertility == {"eng": 1.25}
 
 
-def test_tier1_and_report_unimplemented_contracts_raise() -> None:
+def test_report_reconstruction_is_still_unimplemented() -> None:
+    # Tier0Report.to_dict is deliberately lossy: it omits the partial-UTF-8,
+    # unreachable and special-token id lists, which run to thousands of entries
+    # on a real vocabulary. Rebuilding a Report from a document is therefore not
+    # possible without a schema change, and pretending otherwise would hand back
+    # an object whose Stage-1 exclusion set is silently empty.
+    with pytest.raises(NotImplementedError):
+        Report.from_json("unused.json")
+
+
+def test_a_report_serializes_every_tier_that_ran() -> None:
     tier1 = Tier1Report(per_language={}, corpus_level=CorpusMetrics(), segmenter=Segmenter.STANZA)
     report = Report(tier0=_tier0(), manifest=_manifest(), tier1=tier1)
 
-    with pytest.raises(NotImplementedError):
-        tier1.parity("eng")
-    with pytest.raises(NotImplementedError):
-        tier1.gini()
-    with pytest.raises(NotImplementedError):
-        tier1.renyi_efficiency(2.5)
-    with pytest.raises(NotImplementedError):
-        tier1.to_dict()
-    with pytest.raises(NotImplementedError):
-        Report.from_json("unused.json")
-    with pytest.raises(NotImplementedError):
-        report.to_dict()
+    document = report.to_dict()
+
+    assert document["tier1"]["segmenter"] == "stanza"
+    assert document["tier0"]["vocab_size"] == 10
+    assert "tier2" not in document
 
 
 def test_report_serializes_tier0_tier2_warnings_and_deterministic_json(tmp_path: Path) -> None:

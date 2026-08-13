@@ -32,7 +32,7 @@ from glotscope.tokenizer import Tokenizer
 # as separate entries: 0x00-0x7F decode alone; 0xC2-0xF4 are lead bytes and are
 # therefore truncated forms; everything else is ill-formed without being partial.
 _WELL_FORMED_BYTES = 128
-_PARTIAL_BYTES = 51
+_PARTIAL_BYTES = 115
 _ILL_FORMED_NOT_PARTIAL_BYTES = 256 - _WELL_FORMED_BYTES - _PARTIAL_BYTES
 
 
@@ -163,11 +163,10 @@ def test_stage1_exclusion_stays_narrower_than_the_ill_formed_set(tmp_path: Path)
     report = lint_backend(backend, _spec(path))
     excluded = report.stage1_exclusions()
 
-    # 0xC2 is a truncated lead byte -> excluded. 0x80 is ill-formed but not
-    # partial; it is excluded here only because it is also unreachable, never
-    # because it is ill-formed.
+    # Continuation bytes and truncated lead bytes are partial UTF-8. C0 remains
+    # ill-formed-not-partial and is excluded here only because it is unreachable.
     assert 0xC2 in excluded
-    assert set(report.partial_utf8_tokens) == set(range(0xC2, 0xF5))
+    assert set(report.partial_utf8_tokens) == set(range(0x80, 0xC0)) | set(range(0xC2, 0xF5))
 
 
 def test_byte_fallback_lint_finds_the_hex_escaped_bytes(tmp_path: Path) -> None:
@@ -244,12 +243,16 @@ def test_byte_level_added_tokens_are_read_as_literal_text() -> None:
     assert token_bytes("", TokenizerFamily.BYTE_LEVEL) == b""
 
 
-def test_algorithm_is_unknown_when_the_model_type_is_absent_or_unusable() -> None:
+def test_algorithm_is_inferred_when_the_model_type_is_absent() -> None:
     assert detect_algorithm({}) is Algorithm.UNKNOWN
     assert detect_algorithm({"model": {}}) is Algorithm.UNKNOWN
     assert detect_algorithm({"model": {"type": 7}}) is Algorithm.UNKNOWN
-    # BPE without either byte convention: the type is known, the byte handling is
-    # not, and §7.9 keys its scope limits off this field.
+    assert (
+        detect_algorithm({"model": {"merges": []}, "decoder": {"type": "ByteLevel"}})
+        is Algorithm.BYTE_LEVEL_BPE
+    )
+    assert detect_algorithm({"model": {"continuing_subword_prefix": "##"}}) is Algorithm.WORDPIECE
+    # BPE without either byte convention has an unknown byte convention.
     assert detect_algorithm({"model": {"type": "BPE"}}) is Algorithm.UNKNOWN
     assert detect_algorithm({"model": {"type": "Unigram"}}) is Algorithm.UNIGRAM_LM
 
@@ -267,7 +270,8 @@ def test_wordpiece_lint_reports_the_code_point_family(tmp_path: Path) -> None:
     assert report.family is TokenizerFamily.CODE_POINT
     assert report.token_classes[TokenClass.WELL_FORMED] == 4
     assert report.ill_formed_vocab_rate == 0.0
-    assert report.byte_fallback_coverage == 0
+    assert report.byte_fallback_coverage is None
+    assert report.non_utf8_byte_values is None
 
 
 def test_from_file_warns_when_the_algorithm_cannot_be_identified(tmp_path: Path) -> None:
