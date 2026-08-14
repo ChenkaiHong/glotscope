@@ -23,7 +23,7 @@ uv run --no-sync mypy --strict python/glotscope tests
 uv run --no-sync pytest --cov=glotscope --cov-report=term-missing -q   # gate: 85%
 ```
 
-Baseline as of 13 Aug 2026: **263 tests pass, 97.45% coverage** (248 + 16 skipped without the segmenter extras), ruff/format/mypy clean. Coverage below 85% fails the run, so `--cov` is not optional when judging a change.
+Baseline as of 14 Aug 2026: **273 tests pass, 97.10% coverage** (258 + 16 skipped without the segmenter extras), ruff/format/mypy clean. Coverage below 85% fails the run, so `--cov` is not optional when judging a change.
 
 `.[dev]` installs the extras too. The **core install is `tokenizers` alone** — `numpy`/`safetensors` are the `tier2` extra and `tiktoken` is its own, because G1's clean-install promise is measured on a core install that only claims Tier 0 and Tier 1. Import either inside the function that needs it and name the extra when it is missing.
 
@@ -59,7 +59,7 @@ make upload REPOSITORY=pypi     # -> PyPI
 
 `make leak-check` is mandatory after any change to `pyproject.toml` packaging keys. A published sdist cannot be retracted; `include` is an allowlist and `exclude` is a second guard.
 
-## Repository state (12 Aug 2026)
+## Repository state (14 Aug 2026)
 
 M0 is frozen and merged. Git repo with public remote `ChenkaiHong/glotscope`; **the default branch is `foundation`, not `main`** — CI push events trigger on `foundation` and PRs target it. `master` is a stale local branch.
 
@@ -67,9 +67,13 @@ Implemented and tested: `metrics.py` (Rényi, parity, Gini), `utf8.py` (three-cl
 
 `glotscope lint` and `glotscope analyze` are live and produce a §9 document. **Exit codes are part of the interface**: `0` produced a document, `1` is a typed refusal, `2` is scheduled but not built. A mistyped path is `1`; a Hub identifier is `2`, because `from_pretrained` is the missing piece and saying "your input was wrong" would send the reader after the wrong fix.
 
-Still `NotImplementedError`: `from_pretrained`, `from_tiktoken`, everything at Tier 2, and the `compare`/`verify`/`leaderboard` handlers. `Report.from_json` is blocked on `Tier0Report.to_dict` being lossy — it drops the partial-UTF-8/unreachable/special id lists. No `tier0/`/`tier1/`/`tier2/` packages — deliberately not stubbed (`docs/build-order.md`); their contracts are already pinned by the `Tier1Report` methods and the `aggregate` boundary.
+Still `NotImplementedError`: `from_pretrained`, `from_tiktoken`, everything at Tier 2, and the `compare`/`leaderboard` handlers. `Report.from_json` is blocked on `Tier0Report.to_dict` being lossy — it drops the partial-UTF-8/unreachable/special id lists. No `tier0/`/`tier1/`/`tier2/` packages — deliberately not stubbed (`docs/build-order.md`); their contracts are already pinned by the `Tier1Report` methods and the `aggregate` boundary.
 
-Not yet written: the `glotscope verify` CI job against a committed `result.json` (G4), the nightly leaderboard re-run, `leaderboard.yaml`, `results/`. The 12-cell quality matrix (3.10–3.13 × {ubuntu, macos, windows}) is implemented and green.
+**G4 is closed.** `glotscope verify` regenerates a result from its manifest and compares, and the CI job runs it against the committed `verification/result.json` on **all twelve cells** — so the claim is that a published number reproduces on a different OS and Python, not merely where it was made. The artifact is passed as `--tokenizer` because §9 keeps filesystem paths out of the manifest: the document records what the artifact *is* (a SHA-256), not where it lives, and that hash is checked before anything is recomputed. Environment is excluded from the comparison and printed instead — it is recorded *because* it varies, so demanding it match would make a result verifiable only on the machine that produced it.
+
+`verification/` holds the fixture: four invented sentences under a `verification_fixture` registry entry (CC0), plus the tokenizer and the result. It is the one exception to D12 and an exception in name only — a verification job with no inputs cannot run. Its id is its own rather than borrowed from a real corpus, so the manifest tells the truth about what was measured. `.gitattributes` marks `verification/**` as `-text`, because the digest is over the bytes on disk and a CRLF checkout on Windows would fail the job for a reason unrelated to any number. The fixture sits outside the sdist allowlist, so `tests/test_g4_verification.py` runs from a checkout and skips from an unpacked release.
+
+Not yet written: the nightly leaderboard re-run, `leaderboard.yaml`, `results/`. The 12-cell quality matrix (3.10–3.13 × {ubuntu, macos, windows}) is implemented and green.
 
 Blocking unknowns U1–U5 are **resolved** — evidence in `docs/m0-source-audit.md`, sequencing in `docs/build-order.md`, discrepancies in `docs/divergences.md`. Two PRD items remain `UNVERIFIED` and must not be cited: the gated Command-R / Command-A / Aya Expanse / Gemma 2 vocab sizes, and the Phi-3/3.5 and ByT5 vocab sizes.
 
@@ -115,7 +119,7 @@ Anything requiring a forward pass is Tier 3 and out of scope. When a published r
 - Benchmarks: `criterion` (Rust), `pytest-benchmark` parametrised over both backends, `pytest-codspeed` for CI regression gating
 
 Two CI jobs are load-bearing and easy to forget:
-1. **`glotscope verify` against a committed `result.json`** — from v1, not v2 (§12.3). Without it G4 is an untested aspiration.
+1. **`glotscope verify` against a committed `result.json`** — from v1, not v2 (§12.3). **Done**: it runs on every cell of the quality matrix against `verification/result.json`.
 2. **Nightly leaderboard re-run against pinned revisions that fails if any published number moves** — silent upstream tokenizer changes are otherwise undetectable.
 
 Extras: all segmenters are optional (`pip install glotscope[segmenters]`). MeCab needs a native build, PyICU needs system ICU. G1 promises green Windows CI for the **core install only**; segmenter tests skip-with-message.

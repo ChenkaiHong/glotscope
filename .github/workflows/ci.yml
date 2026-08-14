@@ -63,3 +63,15 @@ jobs:
 
       - name: Test with coverage
         run: uv run --no-sync pytest --cov=glotscope --cov-report=term-missing -q
+
+      # G4: every result carries a manifest, and verify regenerates its numbers
+      # bit-identically. Run on all twelve cells rather than once, because the
+      # claim worth making is that a published number reproduces on a different
+      # OS and a different Python — not that it reproduces where it was made.
+      # The fixture is four invented sentences under verification/, carried so
+      # this job has something to regenerate without shipping a corpus (D12).
+      - name: Verify the committed result reproduces
+        run: >
+          uv run --no-sync glotscope verify verification/result.json
+          --tokenizer verification/tokenizer.json
+          --corpus-root verification/corpus
