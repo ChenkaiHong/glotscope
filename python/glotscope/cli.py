@@ -9,7 +9,7 @@ Stdlib ``argparse`` rather than a third-party CLI framework: the PRD pins the
 toolchain and does not sanction one, and the core install's dependency list is
 load-bearing for the clean-environment install promise in G1.
 
-``lint`` and ``analyze`` are implemented. The rest print a targeted message and
+``lint``, ``analyze`` and ``verify`` are implemented. The rest print a targeted message and
 exit non-zero rather than raising, so the release does not ship a console script
 that tracebacks.
 
@@ -28,13 +28,15 @@ be able to tell these apart:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from glotscope import __version__, backend
-from glotscope.corpus import REGISTRY, Corpus
+from glotscope.corpus import REGISTRY, Corpus, LoadedCorpus
 from glotscope.enums import Normalization, RenyiNormalizer, Segmenter
 from glotscope.errors import GlotscopeError, TokenizerLoadError
 from glotscope.manifest import Manifest, canonical_json, environment
@@ -54,7 +56,6 @@ _MILESTONES = {
     "detect": "M2 (Tier 2)",
     "compare": "M1",
     "leaderboard": "M3",
-    "verify": "M1 — the CI job that delivers G4",
 }
 
 
@@ -164,6 +165,27 @@ def build_parser() -> argparse.ArgumentParser:
 
     verify = sub.add_parser("verify", help="re-check that a manifest reproduces its numbers")
     verify.add_argument("result", help="path to a result.json")
+    verify.add_argument(
+        "--tokenizer",
+        required=True,
+        help=(
+            "the tokenizer.json the result describes. Required because §9 keeps "
+            "filesystem paths out of the manifest, so the document records what "
+            "the artifact is (a SHA-256) but not where it lives. The hash is "
+            "checked against the manifest before anything is recomputed."
+        ),
+    )
+    verify.add_argument(
+        "--corpus-root",
+        default=".",
+        help="directory holding the downloaded corpora; the library ships none (D12)",
+    )
+    verify.add_argument(
+        "--license-filter",
+        choices=["commercial"],
+        default=None,
+        help="exclude research-only resources, as the original run may have done",
+    )
 
     return parser
 
@@ -240,6 +262,68 @@ def _lint(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_report(
+    tokenizer: Tokenizer,
+    loaded: LoadedCorpus,
+    *,
+    leading_space: bool,
+    normalization: Normalization,
+    add_special_tokens: bool,
+    segmenter: Segmenter | None,
+    parity_reference: str | None,
+    gini: bool,
+    renyi_alpha: float | None,
+    renyi_normalizer: RenyiNormalizer,
+    nominal_vocab_size: int | None,
+) -> Report:
+    """Assemble the §9 document. One code path, used by ``analyze`` and ``verify``.
+
+    Shared rather than reimplemented because ``verify``'s whole claim is that it
+    regenerates what ``analyze`` produced. A second assembly of the same document
+    would be a second thing to drift, and that drift would surface as a
+    verification failure blamed on the numbers.
+    """
+    tier1 = tokenizer.analyze(
+        loaded,
+        leading_space=leading_space,
+        normalization=normalization,
+        add_special_tokens=add_special_tokens,
+        segmenter=segmenter,
+    )
+    tier1 = replace(
+        tier1,
+        corpus_level=CorpusMetrics(
+            gini=tier1.gini() if gini else None,
+            renyi=(
+                tier1.renyi_efficiency(
+                    renyi_alpha,
+                    normalizer=renyi_normalizer,
+                    nominal_vocab_size=nominal_vocab_size,
+                )
+                if renyi_alpha is not None
+                else None
+            ),
+            parity=tier1.parity(parity_reference) if parity_reference is not None else None,
+        ),
+    )
+    if tier1.parameters is None or tier1.corpus is None:
+        raise RuntimeError("analyze() returned a report without its manifest fragments")
+
+    return Report(
+        tier0=tokenizer.lint(),
+        tier1=tier1,
+        manifest=Manifest(
+            tokenizer=tokenizer.manifest,
+            parameters=tier1.parameters,
+            environment=environment(),
+            backend=backend(),
+            glotscope_version=__version__,
+            corpus=tier1.corpus,
+        ),
+        warnings=tokenizer.warnings,
+    )
+
+
 def _analyze(args: argparse.Namespace) -> int:
     """Tier 0 + Tier 1 in one §9 document.
 
@@ -255,46 +339,154 @@ def _analyze(args: argparse.Namespace) -> int:
         version=args.corpus_version,
     )
     loaded = corpus.load(args.corpus_root, license_filter=args.license_filter)
-    tier1 = tokenizer.analyze(
+    report = _build_report(
+        tokenizer,
         loaded,
         leading_space=args.leading_space,
         normalization=Normalization(args.normalization),
         add_special_tokens=args.add_special_tokens,
         segmenter=Segmenter(args.segmenter) if args.segmenter is not None else None,
-    )
-    parity = tier1.parity(args.parity_reference) if args.parity_reference is not None else None
-    gini = tier1.gini() if args.gini else None
-    renyi = (
-        tier1.renyi_efficiency(
-            args.renyi_alpha,
-            normalizer=RenyiNormalizer(args.renyi_normalizer),
-            nominal_vocab_size=args.nominal_vocab_size,
-        )
-        if args.renyi_alpha is not None
-        else None
-    )
-    tier1 = replace(tier1, corpus_level=CorpusMetrics(gini=gini, renyi=renyi, parity=parity))
-    if tier1.parameters is None or tier1.corpus is None:
-        raise RuntimeError("analyze() returned a report without its manifest fragments")
-
-    report = Report(
-        tier0=tokenizer.lint(),
-        tier1=tier1,
-        manifest=Manifest(
-            tokenizer=tokenizer.manifest,
-            parameters=tier1.parameters,
-            environment=environment(),
-            backend=backend(),
-            glotscope_version=__version__,
-            corpus=tier1.corpus,
-        ),
-        warnings=tokenizer.warnings,
+        parity_reference=args.parity_reference,
+        gini=args.gini,
+        renyi_alpha=args.renyi_alpha,
+        renyi_normalizer=RenyiNormalizer(args.renyi_normalizer),
+        nominal_vocab_size=args.nominal_vocab_size,
     )
     _emit(canonical_json(report.to_dict()) + "\n", args.out)
     return 0
 
 
-_HANDLERS = {"lint": _lint, "analyze": _analyze}
+_VOLATILE_MANIFEST_FIELDS = ("environment",)
+"""Manifest blocks that legitimately differ between machines.
+
+Environment is recorded *because* it varies — Python version, platform, CPU. A
+verify that demanded it match would only ever succeed on the machine that
+produced the file, so the check would never run in CI, which is the one place
+G4 needs it. The numbers are what must reproduce; the environment is reported.
+"""
+
+
+def _comparable(document: Mapping[str, Any]) -> dict[str, Any]:
+    """The part of a result that must reproduce bit-identically."""
+    stripped = {key: value for key, value in document.items() if key != "manifest"}
+    manifest = document.get("manifest")
+    if isinstance(manifest, Mapping):
+        stripped["manifest"] = {
+            key: value for key, value in manifest.items() if key not in _VOLATILE_MANIFEST_FIELDS
+        }
+    return stripped
+
+
+def _first_difference(committed: Any, regenerated: Any, path: str = "") -> str | None:
+    """The path to the first value that differs, in document order.
+
+    Reported rather than a whole diff: the useful thing is *which* number moved,
+    and a caller who wants the rest can diff the files. Returns ``None`` when the
+    two agree.
+    """
+    if isinstance(committed, Mapping) and isinstance(regenerated, Mapping):
+        for key in sorted(set(committed) | set(regenerated)):
+            here = f"{path}.{key}" if path else str(key)
+            if key not in committed:
+                return f"{here} (only in the regenerated result)"
+            if key not in regenerated:
+                return f"{here} (only in the committed result)"
+            difference = _first_difference(committed[key], regenerated[key], here)
+            if difference is not None:
+                return difference
+        return None
+    if isinstance(committed, list) and isinstance(regenerated, list):
+        if len(committed) != len(regenerated):
+            return f"{path} (length {len(committed)} vs {len(regenerated)})"
+        for index, (left, right) in enumerate(zip(committed, regenerated, strict=True)):
+            difference = _first_difference(left, right, f"{path}[{index}]")
+            if difference is not None:
+                return difference
+        return None
+    if committed != regenerated:
+        return f"{path}: committed {committed!r}, regenerated {regenerated!r}"
+    return None
+
+
+def _verify(args: argparse.Namespace) -> int:
+    """Regenerate a committed result and compare it (PRD §12.3, G4).
+
+    §12.3 wants regeneration rather than a re-read, so this re-runs the analysis
+    from the recorded parameters. §9 forbids filesystem paths in a manifest, so
+    the artifact cannot be resolved from the document — the caller supplies it
+    and the recorded SHA-256 decides whether it is the right one. That check
+    comes first: handing verify the wrong tokenizer must fail on identity, not
+    by producing different numbers and blaming the result.
+    """
+    committed = json.loads(Path(args.result).read_text(encoding="utf-8"))
+    manifest = committed.get("manifest")
+    if not isinstance(manifest, Mapping) or "corpus" not in manifest:
+        raise ValueError(
+            f"{args.result!r} carries no corpus manifest, so there is nothing to "
+            f"regenerate from. `glotscope lint` emits a Tier 0 document without "
+            f"one; verify expects the document `glotscope analyze` writes."
+        )
+
+    tokenizer = _load_tokenizer(args.tokenizer, None)
+    recorded = manifest["tokenizer"]["tokenizer_json_sha256"]
+    if tokenizer.manifest.tokenizer_json_sha256 != recorded:
+        raise TokenizerLoadError(
+            args.tokenizer,
+            f"tokenizer_json_sha256 {tokenizer.manifest.tokenizer_json_sha256} does "
+            f"not match the {recorded} this result was produced with. The manifest "
+            f"pins the artifact by hash and by nothing else",
+        )
+
+    corpus_block = manifest["corpus"]
+    parameters = manifest["parameters"]
+    corpus_level = committed.get("tier1", {}).get("corpus_level", {})
+    corpus = Corpus.resolve(
+        corpus_block["id"],
+        corpus_block["languages"],
+        split=corpus_block["split"],
+        version=corpus_block["version"],
+        sha256=corpus_block["sha256"],
+    )
+    loaded = corpus.load(args.corpus_root, license_filter=args.license_filter)
+    segmenter = parameters.get("segmenter")
+    report = _build_report(
+        tokenizer,
+        loaded,
+        leading_space=parameters["leading_space"],
+        normalization=Normalization(parameters["normalization"]),
+        add_special_tokens=parameters["add_special_tokens"],
+        segmenter=Segmenter(segmenter) if segmenter is not None else None,
+        # Which corpus-level metrics ran is read off the document rather than
+        # asked for again: a verify that skipped them would pass a file whose
+        # gini or renyi no longer reproduces.
+        parity_reference=corpus_level.get("parity", {}).get("reference_language"),
+        gini="gini" in corpus_level,
+        # Renyi's alpha and normalizer are published in the corpus_level block
+        # rather than in ParameterManifest, whose matching fields analyze leaves
+        # unset. Read from where the value actually is, and fall back to the
+        # parameter block so a document that fills it in still verifies.
+        renyi_alpha=corpus_level.get("renyi_alpha", parameters.get("renyi_alpha")),
+        renyi_normalizer=RenyiNormalizer(
+            corpus_level.get("renyi_normalizer") or parameters.get("renyi_normalizer") or "observed"
+        ),
+        nominal_vocab_size=corpus_level.get("renyi_nominal_vocab_size"),
+    )
+
+    regenerated = json.loads(canonical_json(report.to_dict()))
+    difference = _first_difference(_comparable(committed), _comparable(regenerated))
+    if difference is not None:
+        print(f"glotscope verify: {args.result} did not reproduce: {difference}", file=sys.stderr)
+        return _REFUSED
+
+    print(f"{args.result}: reproduced bit-identically.")
+    print(
+        "environment is excluded from the comparison and reported instead: "
+        f"committed {manifest['environment']}, this run {environment().to_dict()}"
+    )
+    return 0
+
+
+_HANDLERS = {"lint": _lint, "analyze": _analyze, "verify": _verify}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
