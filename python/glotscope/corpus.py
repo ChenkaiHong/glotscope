@@ -183,6 +183,24 @@ REGISTRY: dict[str, CorpusSpec] = {
         "revision. Ungated. Sample per language and record the sample's digest, "
         "since the full release is far larger than any run needs.",
     ),
+    "verification_fixture": CorpusSpec(
+        id="verification_fixture",
+        capabilities=frozenset({Capability.PARALLEL}),
+        license="CC0-1.0",
+        is_commercial_ok=True,
+        note="Four invented sentences in two languages, written for this "
+        "repository's G4 verification job and for nothing else. Not a "
+        "measurement corpus: a number computed over it means nothing, and it "
+        "exists only so `glotscope verify` has something to regenerate in CI.",
+        recipe="Ships in this repository under verification/corpus/. The one "
+        "exception to D12, and an exception in name only — the 'corpus' is four "
+        "sentences the author wrote, released CC0, carried because a "
+        "verification job with no inputs cannot run. Its id is its own rather "
+        "than borrowed from a real corpus, so a manifest naming it is telling "
+        "the truth about what was measured.",
+        default_version="1",
+        default_split="devtest",
+    ),
     "universal_dependencies": CorpusSpec(
         id="universal_dependencies",
         capabilities=frozenset({Capability.WORD_SEGMENTATION, Capability.MORPH_GOLD}),

@@ -1,0 +1,6 @@
+# The G4 verification fixture is pinned by SHA-256, so its bytes have to survive
+# a checkout unchanged. Git's end-of-line conversion is on by default on Windows,
+# and rewriting LF to CRLF changes the corpus digest recorded in
+# verification/result.json — the job would fail on three of twelve cells for a
+# reason with nothing to do with the numbers.
+verification/** -text
