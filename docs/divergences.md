@@ -32,6 +32,26 @@ row. Glotscope validates Gini with hand-computed and property tests until reprod
 artifacts exist; it does not reconstruct and tune a tokenizer to the published numbers. See
 [`m0-source-audit.md`](m0-source-audit.md#u3-parity-aware-bpe-artifacts).
 
+## Morphology (§7.7) is not implemented in v0.1.0
+
+**Status:** not a divergence in the numerical sense — a stated absence. No gate.
+
+§7.7's three measures (MorphScore v1, v2, and full alignment against MorphyNet) are **not
+implemented**. `MorphologyResult` and the `align_boundaries` fold pin the contract, and the
+`gathered → boundary-F1 0.25` value from U2 is reproduced against that contract, but nothing computes
+the measures over a corpus and no run emits them.
+
+Recorded here because G3's exit condition is that every §7 subsection has either a reference test or
+an entry in this file, and an unimplemented metric with no entry is precisely the silent hole that
+condition exists to prevent. A reader comparing glotscope against a tool that publishes morphology
+numbers should know the difference is "not built" rather than "measured and disagreed".
+
+Two things that stay true when it is built, both already enforced by the contract: precision is
+non-optional in the return type (D11) — recall alone rewards oversegmentation, and reporting it alone
+is misinformation — and Semitic root-and-pattern and isolating languages return
+`TypologicalScope.OUT_OF_SCOPE` rather than a number, even though the reference implementation
+publishes numbers there (see the next entry).
+
 ## Morphological alignment outside typological scope
 
 **Status:** deliberate semantic divergence.

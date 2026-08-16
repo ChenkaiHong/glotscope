@@ -26,9 +26,10 @@ from glotscope.fertility import fertility
 from glotscope.lint import detect_algorithm, lint_backend
 from glotscope.manifest import ParameterManifest, TokenizerManifest
 from glotscope.report import Tier0Report, Tier1Report, Tier2Report
-from glotscope.results import CorpusMetrics, FertilityResult, LanguageMetrics
+from glotscope.results import CorpusMetrics, FertilityResult, LanguageMetrics, StrrPair
 from glotscope.roundtrip import roundtrip_matches_from_ids
 from glotscope.segmenters import get_segmenter
+from glotscope.strr import strr
 
 if TYPE_CHECKING:
     from glotscope.embeddings import Embeddings
@@ -477,6 +478,7 @@ class Tokenizer:
                     stats, unit_lengths=byte_lengths, is_blank=is_blank, language=language
                 ),
                 fertility=words,
+                strr=self._strr(loaded.corpus, language, documents, normalization),
                 roundtrip_rate=roundtrip_matches / stats.n_documents,
             )
 
@@ -494,6 +496,42 @@ class Tokenizer:
                 segmenter=segmenter,
                 segmenter_model_version=segmenter_model_version,
             ),
+        )
+
+    def _strr(
+        self,
+        corpus: Corpus,
+        language: str,
+        documents: Sequence[str],
+        normalization: Normalization,
+    ) -> StrrPair | None:
+        """Single-token retention rate, when the corpus is a word list (§7.6).
+
+        Gated on :attr:`~glotscope.enums.Capability.WORDLIST` rather than
+        computed always. STRR is **type-level, over a word list** — the share of
+        a list that survives as exactly one token — so running it over sentences
+        would return a number for a quantity nobody defined. Gating on the
+        declared capability rather than on whether the lines happen to look like
+        words is the same rule the rest of Tier 1 follows (D5).
+
+        No segmenter is involved: each line is already one word, so there is no
+        ``W(D)`` choice to make and nothing to refuse.
+        """
+        if Capability.WORDLIST not in corpus.capabilities:
+            return None
+        words = [_normalized(document, normalization) for document in documents]
+        return strr(
+            aggregate_words(
+                _word_encodings(self._backend, words, leading_space=False, add_special_tokens=False)
+            ),
+            aggregate_words(
+                _word_encodings(self._backend, words, leading_space=True, add_special_tokens=False)
+            ),
+            language=language,
+            # The lists ship as written; glotscope does not case-fold them, and
+            # the flag records that rather than asserting anything about the
+            # upstream file.
+            lowercased=False,
         )
 
     def detect_undertrained(

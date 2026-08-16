@@ -314,6 +314,10 @@ class Tier1Report:
             }
             if language_metrics.fertility is not None:
                 entry["fertility"] = language_metrics.fertility.fertility
+                # §7.1 defines P_cont beside fertility, and the two answer
+                # different questions: a tokenizer can hold fertility down while
+                # splitting most words, and only P_cont shows it.
+                entry["p_continued"] = language_metrics.fertility.p_continued
             if language_metrics.strr is not None:
                 entry["strr_bare"] = language_metrics.strr.bare
                 entry["strr_leading_space"] = language_metrics.strr.leading_space

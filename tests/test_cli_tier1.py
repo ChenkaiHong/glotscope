@@ -224,7 +224,7 @@ def test_analyze_reports_a_segmenter_it_cannot_run_as_unbuilt(
     # Exit 2 and a message naming what is actually missing: stanza needs a
     # pinned model, which is a decision rather than an install. Exit 1 would
     # tell a script its argument was wrong when it was not.
-    assert "pinned model" in capsys.readouterr().err
+    assert "explicit local path" in capsys.readouterr().err
 
 
 def test_analyze_runs_a_built_segmenter_end_to_end(
