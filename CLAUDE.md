@@ -23,7 +23,7 @@ uv run --no-sync mypy --strict python/glotscope tests
 uv run --no-sync pytest --cov=glotscope --cov-report=term-missing -q   # gate: 85%
 ```
 
-Baseline as of 14 Aug 2026: **273 tests pass, 97.10% coverage** (258 + 16 skipped without the segmenter extras), ruff/format/mypy clean. Coverage below 85% fails the run, so `--cov` is not optional when judging a change.
+Baseline as of 16 Aug 2026: **280 tests pass, 97.13% coverage** (264 + 16 skipped without the segmenter extras), ruff/format/mypy clean. Coverage below 85% fails the run, so `--cov` is not optional when judging a change.
 
 `.[dev]` installs the extras too. The **core install is `tokenizers` alone** — `numpy`/`safetensors` are the `tier2` extra and `tiktoken` is its own, because G1's clean-install promise is measured on a core install that only claims Tier 0 and Tier 1. Import either inside the function that needs it and name the extra when it is missing.
 
@@ -77,7 +77,9 @@ Not yet written: the nightly leaderboard re-run, `leaderboard.yaml`, `results/`.
 
 Blocking unknowns U1–U5 are **resolved** — evidence in `docs/m0-source-audit.md`, sequencing in `docs/build-order.md`, discrepancies in `docs/divergences.md`. Two PRD items remain `UNVERIFIED` and must not be cited: the gated Command-R / Command-A / Aya Expanse / Gemma 2 vocab sizes, and the Phi-3/3.5 and ByT5 vocab sizes.
 
-PyPI name reserved 10 Aug 2026 with a 0.0.0 placeholder.
+PyPI name reserved 10 Aug 2026 with a 0.0.0 placeholder. **v0.1.0 is prepared and not yet uploaded** — `make upload REPOSITORY=pypi` needs Kai's token, and a published sdist cannot be retracted.
+
+`verify` compares the **numbers**, not the producer: `glotscope_version` and `backend` are reported rather than compared, because comparing them would make every release invalidate every result published before it. `schema_version` *is* compared — a schema change changes the document. The committed fixture is deliberately left at `0.0.0`, so every CI run asserts that a result published by an earlier release still regenerates.
 
 ## Private documents live in a sibling repo
 
