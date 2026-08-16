@@ -127,7 +127,10 @@ def _tier0() -> Tier0Report:
 def test_manifest_serializes_optional_tiers_and_contested_parameters() -> None:
     document = _manifest(with_optional_tiers=True).to_dict()
 
-    assert document["schema_version"] == "1.1"
+    # Pinned as a literal on purpose: a serialized key changing without the
+    # version moving is the failure this assertion exists to make impossible.
+    # 1.2 added p_continued to the per-language block.
+    assert document["schema_version"] == "1.2"
     assert document["backend"] == "python"
     assert document["manifest"]["tokenizer"] == {
         "id": "acme/tokenizer",

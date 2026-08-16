@@ -77,14 +77,16 @@ tripping the scope check it is not asking about."""
 
 _UNBUILT: dict[Segmenter, str] = {
     Segmenter.STANZA: (
-        "stanza segmentation needs a pinned model, and how a model is provisioned "
-        "and recorded is an open decision: a silent download on first use would "
-        "put an unrecorded artifact behind a published number"
+        "stanza segmentation is not built yet. The decision it was waiting on is "
+        "made: the model is an explicit local path the caller pins and glotscope "
+        "records, never a download on first use, which would put an unrecorded "
+        "artifact behind a published number"
     ),
     Segmenter.UDPIPE: (
-        "UDPipe segmentation needs a pinned model, and how a model is provisioned "
-        "and recorded is an open decision: a silent download on first use would "
-        "put an unrecorded artifact behind a published number"
+        "UDPipe segmentation is not built yet. The decision it was waiting on is "
+        "made: the model is an explicit local path the caller pins and glotscope "
+        "records, never a download on first use, which would put an unrecorded "
+        "artifact behind a published number"
     ),
     Segmenter.UD_GOLD: (
         "UD_GOLD reads gold word boundaries out of a treebank, and the corpus "

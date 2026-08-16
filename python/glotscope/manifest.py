@@ -43,8 +43,12 @@ __all__ = [
     "environment",
 ]
 
-SCHEMA_VERSION = "1.1"
-"""Bumped whenever any serialized key or enum value changes."""
+SCHEMA_VERSION = "1.2"
+"""Bumped whenever any serialized key or enum value changes.
+
+1.2 added ``p_continued`` to the per-language block: §7.1 defines it beside
+fertility and the two answer different questions, so computing it and
+publishing only the other left a defined quantity unreadable."""
 
 
 @dataclass(frozen=True, slots=True)

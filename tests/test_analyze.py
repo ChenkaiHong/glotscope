@@ -237,7 +237,7 @@ def test_a_segmenter_that_cannot_run_yet_is_refused_rather_than_recorded(tmp_pat
     # put an unrecorded artifact behind a published number. Recording a
     # segmenter that never ran would be a false claim in the manifest, and an
     # empty fertility mapping the silently-plausible wrong answer D6 prevents.
-    with pytest.raises(NotImplementedError, match="pinned model"):
+    with pytest.raises(NotImplementedError, match="explicit local path"):
         _tokenizer(tmp_path).analyze(_parallel(tmp_path), segmenter=Segmenter.STANZA)
 
 
