@@ -365,10 +365,29 @@ produced the file, so the check would never run in CI, which is the one place
 G4 needs it. The numbers are what must reproduce; the environment is reported.
 """
 
+_VOLATILE_TOP_LEVEL_FIELDS = ("glotscope_version", "backend")
+"""Provenance that identifies the *producer* rather than the result.
+
+Comparing these would make every release invalidate every result published
+before it: upgrading glotscope would fail a verify whose numbers had not moved,
+and the message would say the version differed, which is not a reproduction
+failure. G4 promises the numbers regenerate.
+
+Reported instead, and the difference is the interesting part — "0.2.0 reproduces
+what 0.1.0 published" is the claim a reader wants, and in v2 "the Rust backend
+reproduces the Python numbers" is exactly the backend-parity evidence §13 needs.
+``schema_version`` is deliberately *not* here: a schema change changes the
+document, so it must fail.
+"""
+
 
 def _comparable(document: Mapping[str, Any]) -> dict[str, Any]:
     """The part of a result that must reproduce bit-identically."""
-    stripped = {key: value for key, value in document.items() if key != "manifest"}
+    stripped = {
+        key: value
+        for key, value in document.items()
+        if key != "manifest" and key not in _VOLATILE_TOP_LEVEL_FIELDS
+    }
     manifest = document.get("manifest")
     if isinstance(manifest, Mapping):
         stripped["manifest"] = {
@@ -483,6 +502,21 @@ def _verify(args: argparse.Namespace) -> int:
         "environment is excluded from the comparison and reported instead: "
         f"committed {manifest['environment']}, this run {environment().to_dict()}"
     )
+    produced_by = committed.get("glotscope_version")
+    if produced_by != __version__:
+        # Worth saying loudly rather than burying: the numbers a previous
+        # release published still regenerate under this one. That is the claim
+        # G4 is for, and it is only visible when the versions differ.
+        print(
+            f"produced by glotscope {produced_by}, reproduced by {__version__} — "
+            f"the numbers regenerate across releases."
+        )
+    produced_backend = committed.get("backend")
+    if produced_backend != backend().value:
+        print(
+            f"produced on the {produced_backend} backend, reproduced on "
+            f"{backend().value} — backend parity holds for this result."
+        )
     return 0
 
 

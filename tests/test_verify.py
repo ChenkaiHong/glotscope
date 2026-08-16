@@ -140,6 +140,49 @@ def test_environment_differences_do_not_fail_a_verify(
     assert "environment" in capsys.readouterr().out
 
 
+def test_a_result_from_another_release_still_verifies(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Comparing glotscope_version would make every release invalidate every
+    # result published before it: an upgrade would fail a verify whose numbers
+    # had not moved. G4 promises the *numbers* regenerate, so the version is
+    # reported and the cross-release reproduction is the interesting part.
+    tokenizer, result = _produce(tmp_path)
+    document = json.loads(result.read_text(encoding="utf-8"))
+    document["glotscope_version"] = "0.0.1-an-older-release"
+    result.write_text(json.dumps(document), encoding="utf-8")
+
+    assert main(_verify(tokenizer, result, tmp_path)) == 0
+    assert "regenerate across releases" in capsys.readouterr().out
+
+
+def test_a_result_from_another_backend_still_verifies(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The v2 case, pinned now while it is cheap: "the Rust backend reproduces
+    # the Python numbers" is the backend-parity evidence §13 needs, and a verify
+    # that refused on a backend difference could never produce it.
+    tokenizer, result = _produce(tmp_path)
+    document = json.loads(result.read_text(encoding="utf-8"))
+    document["backend"] = "rust"
+    result.write_text(json.dumps(document), encoding="utf-8")
+
+    assert main(_verify(tokenizer, result, tmp_path)) == 0
+    assert "backend parity holds" in capsys.readouterr().out
+
+
+def test_a_schema_change_still_fails(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # The line between provenance and content. A schema change changes the
+    # document, so it must fail where a version change must not.
+    tokenizer, result = _produce(tmp_path)
+    document = json.loads(result.read_text(encoding="utf-8"))
+    document["schema_version"] = "0.9"
+    result.write_text(json.dumps(document), encoding="utf-8")
+
+    assert main(_verify(tokenizer, result, tmp_path)) == 1
+    assert "schema_version" in capsys.readouterr().err
+
+
 def test_corpus_bytes_that_changed_are_caught_by_the_pinned_digest(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
