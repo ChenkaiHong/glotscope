@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 import pytest
 
@@ -102,7 +100,9 @@ def test_embeddings_only_advertise_original_precision_float_dtypes() -> None:
     assert {"int4", "int8", "uint8"}.isdisjoint(ALLOWED_DTYPES)
 
 
-def test_embedding_loading_and_manifest_paths_explicitly_refuse_until_implemented() -> None:
+def test_the_hub_and_manifest_paths_explicitly_refuse_until_implemented() -> None:
+    # `from_file` is implemented — see tests/test_embeddings_loading.py. These
+    # two are not, and say so rather than returning something empty.
     embeddings = Embeddings(
         e_in=np.empty((4, 2), dtype=np.float32),
         e_out=None,
@@ -116,7 +116,5 @@ def test_embedding_loading_and_manifest_paths_explicitly_refuse_until_implemente
 
     with pytest.raises(NotImplementedError):
         Embeddings.from_checkpoint("acme/model", revision="deadbeef")
-    with pytest.raises(NotImplementedError):
-        Embeddings.from_file(Path("weights.safetensors"), vocab_size=4)
     with pytest.raises(NotImplementedError):
         _ = embeddings.manifest

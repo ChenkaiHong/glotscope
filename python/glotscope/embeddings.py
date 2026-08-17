@@ -21,9 +21,12 @@ install that never included this tier.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from glotscope.errors import UnsupportedCheckpointError
 
 if TYPE_CHECKING:
     from typing import Any
@@ -45,6 +48,120 @@ ALLOWED_DTYPES = frozenset({"float32", "float16", "bfloat16", "float64"})
 quantization, or an integer dtype — is refused with
 :class:`~glotscope.errors.UnsupportedCheckpointError`.
 """
+
+_SAFETENSORS_FLOATS = {
+    "F64": "float64",
+    "F32": "float32",
+    "F16": "float16",
+    "BF16": "bfloat16",
+}
+"""safetensors dtype tags that are original-precision floats, mapped to the
+names in :data:`ALLOWED_DTYPES` and in the §9 manifest."""
+
+_SAFETENSORS_READABLE = {
+    "I8": "int8",
+    "U8": "uint8",
+    "I16": "int16",
+    "U16": "uint16",
+    "I32": "int32",
+    "U32": "uint32",
+    "I64": "int64",
+    "U64": "uint64",
+    "BOOL": "bool",
+    "F8_E4M3": "float8_e4m3",
+    "F8_E5M2": "float8_e5m2",
+}
+"""Spellings for the refusal message. ``I8`` lowercased is ``i8``, which names
+nothing a reader would recognise as the quantization they applied."""
+
+_E_IN_NAMES = (
+    "model.embed_tokens.weight",
+    "transformer.wte.weight",
+    "wte.weight",
+    "embed_tokens.weight",
+    "tok_embeddings.weight",
+    "gpt_neox.embed_in.weight",
+    "model.embed_in.weight",
+    "embeddings.word_embeddings.weight",
+)
+"""Input-embedding tensor names, most common first.
+
+Read from the published safetensors headers of §7.9's reference checkpoints
+rather than guessed: ``google/gemma-2b`` and ``ai21labs/Jamba-v0.1`` use
+``model.embed_tokens.weight``, ``openai-community/gpt2-medium`` uses
+``wte.weight``. The rest cover families those three do not."""
+
+_E_OUT_NAMES = ("lm_head.weight", "output.weight", "embed_out.weight")
+"""Output-embedding names. Absence means the checkpoint ties, which is the case
+for two of the three reference checkpoints — so the tied path is the common one,
+not the exception."""
+
+
+def _deserialize(blob: bytes) -> list[tuple[str, dict[str, Any]]]:
+    """Parse a safetensors buffer into ``(name, {dtype, shape, data})`` pairs.
+
+    Uses ``safetensors``' low-level entry point rather than its numpy binding,
+    because the numpy binding cannot represent BF16 and two of §7.9's three
+    reference checkpoints store exactly that. Imported here rather than at module
+    scope so a core install — which promises Tier 0 and Tier 1 only — reports the
+    missing extra by name instead of failing at import.
+    """
+    try:
+        from safetensors import deserialize
+    except ModuleNotFoundError as exc:  # pragma: no cover - exercised by the extra
+        raise ModuleNotFoundError(
+            "reading embedding tensors needs `safetensors`, which ships in the "
+            "`tier2` extra: pip install 'glotscope[tier2]'"
+        ) from exc
+    # safetensors ships no type information for its Rust entry points, so this
+    # one call is untyped. Narrowed here rather than loosened for the module,
+    # which would silence the check for every call site in the file.
+    parsed: list[tuple[str, dict[str, Any]]] = deserialize(blob)  # type: ignore[no-untyped-call]
+    return parsed
+
+
+def _first_present(tensors: dict[str, Any], names: tuple[str, ...]) -> str | None:
+    return next((name for name in names if name in tensors), None)
+
+
+def _float_dtype(tag: str, checkpoint: str) -> str:
+    """Map a safetensors dtype tag to an allowed float name, or refuse.
+
+    A hard refusal rather than a warning: a 4-bit ``E_in`` still produces
+    perfectly plausible L2 norms, and a plausible wrong number is the worst
+    outcome for a tool whose output other people cite.
+    """
+    if tag in _SAFETENSORS_FLOATS:
+        return _SAFETENSORS_FLOATS[tag]
+    readable = _SAFETENSORS_READABLE.get(tag, tag.lower())
+    raise UnsupportedCheckpointError(
+        checkpoint,
+        f"embedding dtype is {readable}, which is not an original-precision "
+        f"float. Quantization destroys the L2-norm indicator §7.9 depends on "
+        f"while leaving the arithmetic working, so this is refused rather than "
+        f"warned about. Allowed: {', '.join(sorted(ALLOWED_DTYPES))}",
+    )
+
+
+def _as_array(spec: dict[str, Any]) -> FloatMatrix:
+    """Materialise one tensor, widening BF16 to float32.
+
+    numpy has no bfloat16, so the widening is forced rather than chosen. It
+    invents nothing: bfloat16 is the leading 16 bits of a float32, so every
+    value is exact and the manifest still records ``bfloat16`` as what the
+    checkpoint holds.
+    """
+    import numpy as np
+
+    shape = tuple(spec["shape"])
+    data = spec["data"]
+    if spec["dtype"] == "BF16":
+        widened = np.frombuffer(data, dtype=np.uint16).astype(np.uint32) << np.uint32(16)
+        upcast: FloatMatrix = widened.view(np.float32).reshape(shape)
+        return upcast
+    native = {"F64": np.float64, "F32": np.float32, "F16": np.float16}[spec["dtype"]]
+    materialised: FloatMatrix = np.frombuffer(data, dtype=native).reshape(shape)
+    return materialised
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,8 +219,43 @@ class Embeddings:
 
     @classmethod
     def from_file(cls, path: str | Path, *, vocab_size: int) -> Embeddings:
-        """Read embeddings from a local ``safetensors`` file."""
-        raise NotImplementedError
+        """Read embeddings from a local ``safetensors`` file.
+
+        Raises:
+            UnsupportedCheckpointError: if no embedding tensor is present, or if
+                its dtype is not in :data:`ALLOWED_DTYPES`.
+        """
+        blob = Path(path).read_bytes()
+        tensors = dict(_deserialize(blob))
+
+        e_in_name = _first_present(tensors, _E_IN_NAMES)
+        if e_in_name is None:
+            raise UnsupportedCheckpointError(
+                str(path),
+                f"no embedding tensor found. Looked for {', '.join(_E_IN_NAMES)}; "
+                f"the file holds {', '.join(sorted(tensors)[:8])}",
+            )
+
+        dtype = _float_dtype(tensors[e_in_name]["dtype"], str(path))
+        e_out_name = _first_present(tensors, _E_OUT_NAMES)
+        if e_out_name is not None:
+            _float_dtype(tensors[e_out_name]["dtype"], str(path))
+
+        e_in = _as_array(tensors[e_in_name])
+        return cls(
+            e_in=e_in,
+            e_out=None if e_out_name is None else _as_array(tensors[e_out_name]),
+            # Tying is read off the file rather than off a config flag:
+            # `tie_word_embeddings` is absent from gemma-2b's config entirely,
+            # and the absence of a separate head is the fact that decides which
+            # indicators can run.
+            tied=e_out_name is None,
+            dtype=dtype,
+            shard_sha256=hashlib.sha256(blob).hexdigest(),
+            checkpoint=str(path),
+            n_rows=int(e_in.shape[0]),
+            vocab_size=vocab_size,
+        )
 
     @property
     def manifest(self) -> WeightsManifest:
