@@ -1,0 +1,254 @@
+"""The two Tier 2 under-training indicators (PRD §7.9, D9, D10).
+
+    u_ref             = (1/|t_ref|) sum_{i in t_ref} E_out,i
+    C(A, x)_i         = 1 - (A_i . x) / (||A_i|| . ||x||)
+    indicator_tied    = C(E_out, u_ref)      # low implies under-trained
+    indicator_untied  = || E_in,i ||         # low implies under-trained
+
+Both point the same way, so both rank ascending. When the embeddings are untied
+D10 requires running both and reporting their Spearman agreement rather than
+assuming which one weight decay favours — applied weight decay is frequently
+undocumented, and measuring beats guessing.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from glotscope.detect import cosine_distance, detect, spearman
+from glotscope.enums import Confidence, Indicator
+
+
+def test_spearman_is_one_for_a_monotone_pair() -> None:
+    assert spearman(np.array([1.0, 2.0, 3.0, 4.0]), np.array([5.0, 6.0, 7.0, 8.0])) == 1.0
+
+
+def test_spearman_is_minus_one_for_a_reversed_pair() -> None:
+    assert spearman(np.array([1.0, 2.0, 3.0, 4.0]), np.array([4.0, 3.0, 2.0, 1.0])) == -1.0
+
+
+def test_spearman_averages_tied_ranks() -> None:
+    # Ties must share the mean of the ranks they span, or the coefficient is
+    # not Spearman's. Ranks become [1.5, 1.5, 3.5, 3.5] against [1, 2, 3, 4],
+    # giving 4 / (2 * sqrt(5)).
+    value = spearman(np.array([1.0, 1.0, 2.0, 2.0]), np.array([10.0, 20.0, 30.0, 40.0]))
+    assert value == pytest.approx(2 / np.sqrt(5), abs=1e-12)
+
+
+def test_cosine_distance_is_zero_along_the_reference_direction() -> None:
+    matrix = np.array([[1.0, 0.0], [2.0, 0.0], [0.0, 1.0]])
+    reference = np.array([1.0, 0.0])
+
+    distances = cosine_distance(matrix, reference)
+
+    # Scale-invariant: row 1 is twice row 0 and just as aligned.
+    assert distances[0] == pytest.approx(0.0, abs=1e-12)
+    assert distances[1] == pytest.approx(0.0, abs=1e-12)
+    assert distances[2] == pytest.approx(1.0, abs=1e-12)
+
+
+def test_a_tied_checkpoint_runs_the_cosine_indicator_alone() -> None:
+    # Arrange — rows 0 and 1 point at the reference row 3; row 2 does not.
+    e_out = np.array([[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [1.0, 0.0]])
+
+    # Act
+    result = detect(
+        e_in=e_out,
+        e_out=e_out,
+        tied=True,
+        reference_ids=(3,),
+        excluded=frozenset({3}),
+        vocab_size=4,
+        top_pct=50.0,
+    )
+
+    # Assert
+    assert result.indicator is Indicator.COSINE_TO_UNUSED_MEAN
+    assert result.agreement is None
+    assert result.confidence is Confidence.HIGH
+    assert result.ranked[0][0] == 0
+
+
+def test_an_untied_checkpoint_runs_both_and_reports_agreement() -> None:
+    # Arrange — L2 and cosine rank these the same way.
+    e_in = np.array([[0.01, 0.0], [0.5, 0.0], [1.0, 0.0], [2.0, 0.0]])
+    e_out = np.array([[1.0, 0.0], [0.7, 0.7], [0.0, 1.0], [1.0, 0.0]])
+
+    # Act
+    result = detect(
+        e_in=e_in,
+        e_out=e_out,
+        tied=False,
+        reference_ids=(3,),
+        excluded=frozenset({3}),
+        vocab_size=4,
+        top_pct=100.0,
+    )
+
+    # Assert
+    assert result.indicator is Indicator.L2_E_IN
+    assert result.agreement is not None
+    assert result.confidence is Confidence.HIGH
+
+
+def test_indicators_that_disagree_are_reported_as_low_confidence() -> None:
+    # Arrange — L2 ascending is the exact reverse of cosine ascending.
+    e_in = np.array([[0.1, 0.0], [1.0, 0.0], [10.0, 0.0], [1.0, 0.0]])
+    e_out = np.array([[0.0, 1.0], [0.7, 0.7], [1.0, 0.0], [1.0, 0.0]])
+
+    # Act
+    result = detect(
+        e_in=e_in,
+        e_out=e_out,
+        tied=False,
+        reference_ids=(3,),
+        excluded=frozenset({3}),
+        vocab_size=4,
+        top_pct=100.0,
+    )
+
+    # Assert
+    assert result.agreement is not None
+    assert result.agreement < 0
+    assert result.confidence is Confidence.LOW_CONFIDENCE
+    assert any("disagree" in warning for warning in result.warnings)
+
+
+def test_stage_one_exclusions_never_appear_as_candidates() -> None:
+    # Arrange
+    e_in = np.array([[0.0, 0.0], [0.1, 0.0], [1.0, 0.0], [2.0, 0.0]])
+
+    # Act — row 0 has the smallest norm of all and is excluded.
+    result = detect(
+        e_in=e_in,
+        e_out=e_in,
+        tied=True,
+        reference_ids=(3,),
+        excluded=frozenset({0, 3}),
+        vocab_size=4,
+        top_pct=100.0,
+    )
+
+    # Assert
+    assert 0 not in [token_id for token_id, _ in result.ranked]
+    assert 3 not in [token_id for token_id, _ in result.ranked]
+
+
+def test_top_pct_is_applied_after_exclusion_and_both_counts_are_recorded() -> None:
+    # §7.9: the ordering is what makes the denominator reproducible.
+    # Arrange — 10 rows, 2 excluded, so 8 survive and 50% of 8 is 4.
+    e_in = np.arange(1, 21, dtype=np.float64).reshape(10, 2)
+
+    # Act
+    result = detect(
+        e_in=e_in,
+        e_out=e_in,
+        tied=True,
+        reference_ids=(9,),
+        excluded=frozenset({0, 9}),
+        vocab_size=10,
+        top_pct=50.0,
+    )
+
+    # Assert
+    assert result.pre_exclusion == 10
+    assert result.post_exclusion == 8
+    assert len(result.ranked) == 4
+
+
+def test_padding_rows_are_not_candidates() -> None:
+    # Rows above |V| are not tokens; they are the reference set's second link.
+    # Arrange — 6 embedding rows, 4 of them vocabulary.
+    e_in = np.array([[3.0, 0.0], [2.0, 0.0], [1.0, 0.0], [4.0, 0.0], [0.0, 0.1], [0.0, 0.1]])
+
+    # Act
+    result = detect(
+        e_in=e_in,
+        e_out=e_in,
+        tied=True,
+        reference_ids=(4, 5),
+        excluded=frozenset(),
+        vocab_size=4,
+        top_pct=100.0,
+    )
+
+    # Assert
+    assert max(token_id for token_id, _ in result.ranked) < 4
+    assert result.pre_exclusion == 4
+
+
+def test_first_principal_component_removal_is_off_by_default() -> None:
+    # D9: the source paper's own Table 2 shows no consistent improvement, so
+    # shipping it on would be cargo-culting.
+    # Arrange
+    e_in = np.array([[1.0, 0.0], [0.5, 0.0], [0.25, 0.0], [1.0, 1.0]])
+
+    # Act
+    result = detect(
+        e_in=e_in,
+        e_out=e_in,
+        tied=True,
+        reference_ids=(3,),
+        excluded=frozenset({3}),
+        vocab_size=4,
+        top_pct=100.0,
+    )
+
+    # Assert
+    assert result.first_pc_removed is False
+
+
+def test_first_principal_component_removal_is_recorded_when_asked_for() -> None:
+    # Arrange
+    e_in = np.array([[1.0, 0.0], [0.5, 0.0], [0.25, 0.0], [1.0, 1.0]])
+
+    # Act
+    result = detect(
+        e_in=e_in,
+        e_out=e_in,
+        tied=True,
+        reference_ids=(3,),
+        excluded=frozenset({3}),
+        vocab_size=4,
+        top_pct=100.0,
+        first_pc_removed=True,
+    )
+
+    # Assert
+    assert result.first_pc_removed is True
+    assert any("first principal component" in warning.lower() for warning in result.warnings)
+
+
+def test_excluding_everything_leaves_no_candidates_rather_than_guessing() -> None:
+    # Arrange
+    e_in = np.array([[1.0, 0.0], [0.5, 0.0]])
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="Stage 1"):
+        detect(
+            e_in=e_in,
+            e_out=e_in,
+            tied=True,
+            reference_ids=(1,),
+            excluded=frozenset({0, 1}),
+            vocab_size=2,
+            top_pct=100.0,
+        )
+
+
+def test_an_out_of_range_top_pct_is_refused() -> None:
+    # Arrange
+    e_in = np.array([[1.0, 0.0], [0.5, 0.0]])
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="top_pct"):
+        detect(
+            e_in=e_in,
+            e_out=e_in,
+            tied=True,
+            reference_ids=(1,),
+            excluded=frozenset({1}),
+            vocab_size=2,
+            top_pct=0.0,
+        )

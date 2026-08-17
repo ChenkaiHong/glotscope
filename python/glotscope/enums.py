@@ -20,6 +20,7 @@ __all__ = [
     "Indicator",
     "MorphologicalType",
     "Normalization",
+    "ReferenceSource",
     "RenyiNormalizer",
     "Segmenter",
     "TokenClass",
@@ -129,6 +130,22 @@ class Algorithm(str, Enum):
     UNKNOWN = "unknown"
     """Recorded honestly rather than guessed. Tier 2 scope limits key off this:
     §7.9 is validated on BPE only, and Unigram-LM models are untested."""
+
+
+class ReferenceSource(str, Enum):
+    """Which link of the §7.9 fallback chain supplied ``t_ref``.
+
+    Recorded rather than inferred, because the three links are not equally
+    strong evidence. An ``<unused…>`` entry is the vocabulary *stating* that a
+    token was never trained; a row above ``|V|`` is padding by inference; an
+    unused byte is a token that exists and merely should never appear in
+    well-formed text. A reader comparing two checkpoints needs to know which
+    yardstick each number was measured against.
+    """
+
+    UNUSED_TOKENS = "unused_tokens"
+    PADDING_ROWS = "padding_rows"
+    UNUSED_BYTES = "unused_bytes"
 
 
 class MorphologicalType(str, Enum):
