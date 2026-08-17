@@ -28,7 +28,9 @@ import os
 from importlib.metadata import PackageNotFoundError, version
 
 from glotscope.aggregate import BoundaryCounts, DocumentStats, WordStats
+from glotscope.compare import ComparisonTable, compare
 from glotscope.corpus import Corpus, LoadedCorpus
+from glotscope.document import LoadedResult, load_result
 from glotscope.embeddings import Embeddings
 from glotscope.enums import (
     Algorithm,
@@ -49,6 +51,7 @@ from glotscope.errors import (
     GlotscopeError,
     IncomparableError,
     NoReferenceSetError,
+    SchemaVersionError,
     SegmenterRequiredError,
     TokenizerLoadError,
     UnsupportedCheckpointError,
@@ -72,6 +75,7 @@ __all__ = [
     "BoundaryCounts",
     "Capability",
     "CapabilityError",
+    "ComparisonTable",
     "CompressionResult",
     "Confidence",
     "Corpus",
@@ -83,6 +87,7 @@ __all__ = [
     "IncomparableError",
     "Indicator",
     "LoadedCorpus",
+    "LoadedResult",
     "Manifest",
     "MorphologicalType",
     "MorphologyResult",
@@ -92,6 +97,7 @@ __all__ = [
     "RenyiNormalizer",
     "RenyiResult",
     "Report",
+    "SchemaVersionError",
     "Segmenter",
     "SegmenterRequiredError",
     "StrrPair",
@@ -108,7 +114,9 @@ __all__ = [
     "WordStats",
     "__version__",
     "backend",
+    "compare",
     "environment",
+    "load_result",
 ]
 
 try:

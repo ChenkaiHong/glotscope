@@ -460,7 +460,9 @@ class Report:
         """
         Path(path).write_text(canonical_json(self.to_dict()) + "\n", encoding="utf-8")
 
-    @classmethod
-    def from_json(cls, path: str | Path) -> Report:
-        """Load a result document, validating ``schema_version``."""
-        raise NotImplementedError
+    # There is deliberately no `from_json`. §9's tier0 block publishes
+    # `unreachable_count` and not the ids behind it, so a document cannot
+    # rebuild the report that wrote it, and a Report reconstructed from one
+    # would answer `stage1_exclusions()` with an empty set that looks entirely
+    # valid. Read documents with `glotscope.document.load_result`, which returns
+    # a type that never had the method.

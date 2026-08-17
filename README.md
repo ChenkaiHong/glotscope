@@ -10,10 +10,10 @@ It is the first package to span corpus metrics *and* model-weight metrics. Exist
 suites stop at the tokenizer; the existing glitch-token detector starts at the weights and is not
 installable.
 
-> **Status: 0.0.0 — pre-release foundation.** Contract types, initial metric primitives, and tests are
-> implemented; CLI metric execution is not. See the
-> [`build order and open questions`](docs/build-order.md). First functional release (Tier 0 + Tier 1)
-> is v0.1.0.
+> **Status: v0.1.0 prepared, not yet published.** Tier 0 and Tier 1 are implemented and tested, and
+> `glotscope lint`, `analyze`, `compare` and `verify` run. `detect` (Tier 2) and `leaderboard` are
+> scheduled and exit 2 rather than guessing. The only release on PyPI is the 0.0.0 name reservation.
+> See the [`build order and open questions`](docs/build-order.md).
 
 ## What these metrics do and do not tell you
 

@@ -35,7 +35,6 @@ def test_cli_without_a_command_prints_help_and_returns_nonzero(
     ("argv", "command", "milestone"),
     [
         (["detect", "acme/tokenizer", "--weights", "weights.safetensors"], "detect", "M2 (Tier 2)"),
-        (["compare", "one", "two", "--metric", "parity"], "compare", "M1"),
         (["leaderboard", "--config", "board.toml", "--out", "board.json"], "leaderboard", "M3"),
     ],
 )

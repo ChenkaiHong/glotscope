@@ -9,9 +9,9 @@ Stdlib ``argparse`` rather than a third-party CLI framework: the PRD pins the
 toolchain and does not sanction one, and the core install's dependency list is
 load-bearing for the clean-environment install promise in G1.
 
-``lint``, ``analyze`` and ``verify`` are implemented. The rest print a targeted message and
-exit non-zero rather than raising, so the release does not ship a console script
-that tracebacks.
+``lint``, ``analyze``, ``compare`` and ``verify`` are implemented. The rest print
+a targeted message and exit non-zero rather than raising, so the release does not
+ship a console script that tracebacks.
 
 Exit codes are part of the interface, because a script reading the status has to
 be able to tell these apart:
@@ -36,7 +36,10 @@ from pathlib import Path
 from typing import Any
 
 from glotscope import __version__, backend
+from glotscope.compare import METRICS
+from glotscope.compare import compare as compare_results
 from glotscope.corpus import REGISTRY, Corpus, LoadedCorpus
+from glotscope.document import load_result
 from glotscope.enums import Normalization, RenyiNormalizer, Segmenter
 from glotscope.errors import GlotscopeError, TokenizerLoadError
 from glotscope.manifest import Manifest, canonical_json, environment
@@ -54,7 +57,6 @@ _NOT_YET = 2
 
 _MILESTONES = {
     "detect": "M2 (Tier 2)",
-    "compare": "M1",
     "leaderboard": "M3",
 }
 
@@ -153,10 +155,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     compare = sub.add_parser(
         "compare",
-        help="tabulate a metric across tokenizers; refuses incomparable results",
+        help="tabulate a metric across published results; refuses incomparable ones",
     )
-    compare.add_argument("tokenizers", nargs="+")
-    compare.add_argument("--metric", required=True)
+    compare.add_argument(
+        "results",
+        nargs="+",
+        help=(
+            "result.json documents written by `glotscope analyze`. §8.2 sketches "
+            "these as tokenizers, but its own refusal requirement is unreachable "
+            "that way: tokenizers analyzed together share one set of flags and "
+            "can never disagree. Only a published document records the parameters "
+            "its numbers were produced under"
+        ),
+    )
+    compare.add_argument("--metric", required=True, choices=list(METRICS))
     compare.add_argument("--format", choices=["md", "json", "csv"], default="md")
 
     leaderboard = sub.add_parser("leaderboard", help="regenerate the published leaderboard")
@@ -520,7 +532,24 @@ def _verify(args: argparse.Namespace) -> int:
     return 0
 
 
-_HANDLERS = {"lint": _lint, "analyze": _analyze, "verify": _verify}
+def _compare(args: argparse.Namespace) -> int:
+    """Table one metric across published results (PRD §8.2).
+
+    Reads documents rather than tokenizers. The refusal §8.2 asks for is a
+    statement about two *runs*, and only a document carries the parameters its
+    run was performed under.
+    """
+    table = compare_results([load_result(path) for path in args.results], metric=args.metric)
+    if args.format == "json":
+        print(canonical_json(table.to_dict()))
+    elif args.format == "csv":
+        print(table.to_csv(), end="")
+    else:
+        print(table.to_markdown())
+    return 0
+
+
+_HANDLERS = {"lint": _lint, "analyze": _analyze, "compare": _compare, "verify": _verify}
 
 
 def main(argv: Sequence[str] | None = None) -> int:

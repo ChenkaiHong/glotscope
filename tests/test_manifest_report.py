@@ -262,14 +262,17 @@ def test_tier1_fertility_requires_a_segmenter_and_omits_uncomputed_languages() -
     assert with_segmenter.fertility == {"eng": 1.25}
 
 
-def test_report_reconstruction_is_still_unimplemented() -> None:
+def test_a_report_cannot_be_reconstructed_from_a_document() -> None:
     # Tier0Report.to_dict is deliberately lossy: it omits the partial-UTF-8,
     # unreachable and special-token id lists, which run to thousands of entries
     # on a real vocabulary. Rebuilding a Report from a document is therefore not
     # possible without a schema change, and pretending otherwise would hand back
     # an object whose Stage-1 exclusion set is silently empty.
-    with pytest.raises(NotImplementedError):
-        Report.from_json("unused.json")
+    #
+    # So the reader is `glotscope.document.load_result`, which returns a type
+    # that never had `stage1_exclusions` to get wrong. The absence below is the
+    # design, not an omission.
+    assert not hasattr(Report, "from_json")
 
 
 def test_a_report_serializes_every_tier_that_ran() -> None:
