@@ -9,9 +9,9 @@ Stdlib ``argparse`` rather than a third-party CLI framework: the PRD pins the
 toolchain and does not sanction one, and the core install's dependency list is
 load-bearing for the clean-environment install promise in G1.
 
-``lint``, ``analyze``, ``compare`` and ``verify`` are implemented. The rest print
-a targeted message and exit non-zero rather than raising, so the release does not
-ship a console script that tracebacks.
+``lint``, ``analyze``, ``detect``, ``compare`` and ``verify`` are implemented.
+``leaderboard`` prints a targeted message and exits non-zero rather than raising,
+so the release does not ship a console script that tracebacks.
 
 Exit codes are part of the interface, because a script reading the status has to
 be able to tell these apart:
@@ -40,9 +40,10 @@ from glotscope.compare import METRICS
 from glotscope.compare import compare as compare_results
 from glotscope.corpus import REGISTRY, Corpus, LoadedCorpus
 from glotscope.document import load_result
+from glotscope.embeddings import Embeddings
 from glotscope.enums import Normalization, RenyiNormalizer, Segmenter
 from glotscope.errors import GlotscopeError, TokenizerLoadError
-from glotscope.manifest import Manifest, canonical_json, environment
+from glotscope.manifest import Manifest, ParameterManifest, canonical_json, environment
 from glotscope.report import Report
 from glotscope.results import CorpusMetrics
 from glotscope.tokenizer import Tokenizer
@@ -56,7 +57,6 @@ _NOT_YET = 2
 """Exit code for a subcommand whose implementation is still scheduled."""
 
 _MILESTONES = {
-    "detect": "M2 (Tier 2)",
     "leaderboard": "M3",
 }
 
@@ -152,6 +152,16 @@ def build_parser() -> argparse.ArgumentParser:
             "pinning it: a result that exists only at 2%% is an artifact."
         ),
     )
+    detect.add_argument(
+        "--remove-first-pc",
+        action="store_true",
+        help=(
+            "project out the leading principal component before ranking. Off by "
+            "default (D9): the source paper's own Table 2 shows no consistent "
+            "improvement from it across seven models. Recorded either way."
+        ),
+    )
+    detect.add_argument("--out", default=None, help="write result.json here (default: stdout)")
 
     compare = sub.add_parser(
         "compare",
@@ -255,6 +265,27 @@ def _load_tokenizer(source: str, revision: str | None) -> Tokenizer:
         f"{source!r} is not a local file. Loading by Hub identifier needs "
         f"from_pretrained(), which is not implemented in this release."
     )
+
+
+def _load_embeddings(source: str, *, vocab_size: int) -> Embeddings:
+    """Load the weights named on the command line.
+
+    Mirrors :func:`_load_tokenizer`'s three-way answer, and for the same reason:
+    a path that does not exist is a wrong argument to fix now (exit 1), while a
+    Hub identifier is a feature scheduled for a later release (exit 2). Collapsing
+    them would send a reader after the wrong fix.
+
+    Raises:
+        FileNotFoundError: the source names a place on this disk holding nothing.
+        NotImplementedError: the source is a Hub identifier;
+            ``Embeddings.from_checkpoint`` is not implemented in this release.
+    """
+    path = Path(source)
+    if path.is_file():
+        return Embeddings.from_file(path, vocab_size=vocab_size)
+    if _looks_like_a_local_path(source):
+        raise FileNotFoundError(f"{source}: no such file or directory")
+    return Embeddings.from_checkpoint(source)
 
 
 def _emit(document: str, out: str | None) -> None:
@@ -391,6 +422,55 @@ reproduces the Python numbers" is exactly the backend-parity evidence §13 needs
 ``schema_version`` is deliberately *not* here: a schema change changes the
 document, so it must fail.
 """
+
+
+def _detect(args: argparse.Namespace) -> int:
+    """Tier 0 + Tier 2 in one §9 document.
+
+    No corpus block: Tier 2 reads weights and needs no text, so the manifest
+    omits the corpus rather than writing nulls into it — §9's nesting is what a
+    reader uses to tell which tiers ran.
+
+    The parameter block records ``leading_space=False`` and
+    ``normalization=none`` because that is what happened: nothing here encodes
+    corpus text, and Tier 0's reachability check encodes each vocabulary entry
+    verbatim with no special tokens. Copying ``analyze``'s defaults in would put
+    a claim about text processing into a document that processed none.
+    """
+    tokenizer = _load_tokenizer(args.tokenizer, args.revision)
+    tier0 = tokenizer.lint()
+    embeddings = _load_embeddings(args.weights, vocab_size=tier0.vocab_size)
+    tier2 = tokenizer.detect_undertrained(
+        embeddings,
+        top_pct=args.top_pct,
+        remove_first_pc=args.remove_first_pc,
+    )
+
+    report = Report(
+        tier0=tier0,
+        tier2=tier2,
+        manifest=Manifest(
+            tokenizer=tokenizer.manifest,
+            parameters=ParameterManifest(
+                leading_space=False,
+                normalization=Normalization.NONE,
+                add_special_tokens=False,
+                top_pct=args.top_pct,
+                candidates_pre_exclusion=tier2.candidates_pre_exclusion,
+                candidates_post_exclusion=tier2.candidates_post_exclusion,
+                first_pc_removed=tier2.first_pc_removed,
+            ),
+            environment=environment(),
+            backend=backend(),
+            glotscope_version=__version__,
+            weights=embeddings.manifest,
+        ),
+        warnings=tokenizer.warnings,
+    )
+    for warning in tokenizer.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    _emit(canonical_json(report.to_dict()) + "\n", args.out)
+    return 0
 
 
 def _comparable(document: Mapping[str, Any]) -> dict[str, Any]:
@@ -549,7 +629,13 @@ def _compare(args: argparse.Namespace) -> int:
     return 0
 
 
-_HANDLERS = {"lint": _lint, "analyze": _analyze, "compare": _compare, "verify": _verify}
+_HANDLERS = {
+    "lint": _lint,
+    "analyze": _analyze,
+    "detect": _detect,
+    "compare": _compare,
+    "verify": _verify,
+}
 
 
 def main(argv: Sequence[str] | None = None) -> int:

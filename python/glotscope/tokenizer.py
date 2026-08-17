@@ -20,16 +20,30 @@ from tokenizers import Tokenizer as BackendTokenizer
 from glotscope.aggregate import DocumentStats, aggregate_documents, aggregate_words
 from glotscope.compression import compression
 from glotscope.corpus import Corpus, LoadedCorpus
-from glotscope.enums import Algorithm, Capability, Normalization, Segmenter
-from glotscope.errors import TokenizerLoadError
+from glotscope.detect import Detection, detect
+from glotscope.enums import (
+    Algorithm,
+    Capability,
+    Normalization,
+    Segmenter,
+    TokenClass,
+    TokenizerFamily,
+)
+from glotscope.errors import (
+    NoReferenceSetError,
+    TokenizerLoadError,
+    UnsupportedCheckpointError,
+)
 from glotscope.fertility import fertility
-from glotscope.lint import detect_algorithm, lint_backend
-from glotscope.manifest import ParameterManifest, TokenizerManifest
-from glotscope.report import Tier0Report, Tier1Report, Tier2Report
+from glotscope.lint import detect_algorithm, lint_backend, token_bytes
+from glotscope.manifest import UNKNOWN_LICENSE, ParameterManifest, TokenizerManifest
+from glotscope.reference_set import resolve_reference_set
+from glotscope.report import Tier0Report, Tier1Report, Tier2Report, TokenCandidate
 from glotscope.results import CorpusMetrics, FertilityResult, LanguageMetrics, StrrPair
 from glotscope.roundtrip import roundtrip_matches_from_ids
 from glotscope.segmenters import get_segmenter
 from glotscope.strr import strr
+from glotscope.utf8 import classify_utf8_token
 
 if TYPE_CHECKING:
     from glotscope.embeddings import Embeddings
@@ -40,8 +54,6 @@ _LOCAL_REVISION = "local"
 """Recorded where an upstream revision does not exist. A local file has no commit
 to pin, and inventing one would put an unverifiable string in the field
 ``glotscope verify`` trusts."""
-
-_UNKNOWN_LICENSE = "UNKNOWN"
 
 _NO_REVISION_WARNING = (
     "local tokenizer.json: no upstream revision exists, so revision is recorded "
@@ -70,6 +82,48 @@ _UNICODE_FORMS: dict[Normalization, Literal["NFC", "NFD", "NFKC", "NFKD"]] = {
     Normalization.NFKC: "NFKC",
     Normalization.NFKD: "NFKD",
 }
+
+
+_BPE_ALGORITHMS = frozenset({Algorithm.BYTE_LEVEL_BPE, Algorithm.BYTE_FALLBACK_BPE})
+"""What §7.9 was validated on. Anything else is warned about rather than refused:
+Land & Bartolo report Unigram-LM as untested, and untested is not inapplicable."""
+
+
+def _candidates(
+    detection: Detection,
+    *,
+    vocab: Mapping[str, int],
+    family: TokenizerFamily,
+) -> tuple[TokenCandidate, ...]:
+    """Turn ranked ids into displayable candidates (PRD §7.9).
+
+    ``token_repr`` decodes with ``errors="replace"`` deliberately. Candidates are
+    frequently partial byte sequences, and a replacement character is the honest
+    rendering of one — raising or dropping the row would hide exactly the tokens
+    §7.9 is looking for. It is for display only; re-encoding it would not
+    reproduce the id.
+
+    ``script`` is ``None`` for now. UAX #24 attribution is what §14.3 regresses
+    on (D14) and is deferred to M4; a guess here would be laundered into the
+    paper's independent variable.
+    """
+    by_id = {token_id: token for token, token_id in vocab.items()}
+    return tuple(
+        TokenCandidate(
+            token_id=token_id,
+            token_repr=token_bytes(by_id[token_id], family).decode("utf-8", errors="replace")
+            if token_id in by_id
+            else "",
+            indicator=detection.indicator,
+            indicator_value=value,
+            rank=rank,
+            token_class=classify_utf8_token(token_bytes(by_id[token_id], family))
+            if token_id in by_id
+            else TokenClass.WELL_FORMED,
+            script=None,
+        )
+        for rank, (token_id, value) in enumerate(detection.ranked, start=1)
+    )
 
 
 def _normalized(text: str, form: Normalization) -> str:
@@ -261,7 +315,7 @@ class Tokenizer:
         path: str | Path,
         *,
         tokenizer_id: str | None = None,
-        license_spdx: str = _UNKNOWN_LICENSE,
+        license_spdx: str = UNKNOWN_LICENSE,
     ) -> Tokenizer:
         """Load a local ``tokenizer.json``.
 
@@ -557,8 +611,81 @@ class Tokenizer:
         more complex alternatives.
 
         Raises:
-            NoReferenceSetError: if the reference-set fallback chain is exhausted.
-            UnsupportedCheckpointError: if the embeddings are quantized or
-                otherwise not in original dtype.
+            NoReferenceSetError: if the reference-set fallback chain is exhausted
+                **and** the embeddings are tied, leaving no indicator that can
+                run. An untied checkpoint degrades to ``L2(E_in)`` with a warning
+                instead, which is what §7.9's table prescribes.
+            UnsupportedCheckpointError: if the embeddings are quantized, or were
+                built for a vocabulary of a different size — row *i* is token *i*
+                or it is nothing.
         """
-        raise NotImplementedError
+        tier0 = self.lint()
+        if embeddings.vocab_size != tier0.vocab_size:
+            raise UnsupportedCheckpointError(
+                embeddings.checkpoint,
+                f"the embeddings were read for a vocabulary of "
+                f"{embeddings.vocab_size} tokens and this tokenizer has "
+                f"{tier0.vocab_size}. Row i of E_in is token i or it is nothing, "
+                f"so ranking across the mismatch would report one model's rows "
+                f"under another model's token ids",
+            )
+
+        vocab: Mapping[str, int] = self._backend.get_vocab(with_added_tokens=True)
+        warnings: list[str] = []
+        if self._manifest.algorithm not in _BPE_ALGORITHMS:
+            warnings.append(
+                f"§7.9 is validated on BPE tokenizers; this one is recorded as "
+                f"{self._manifest.algorithm.value} and Unigram-LM models are "
+                f"untested upstream. The indicators still compute — untested is "
+                f"not the same as inapplicable — but nothing here has been "
+                f"checked against a published result for this family"
+            )
+
+        try:
+            reference = resolve_reference_set(
+                vocab,
+                tier0.family,
+                vocab_size=tier0.vocab_size,
+                n_rows=embeddings.n_rows,
+                checkpoint=embeddings.checkpoint,
+                tied=embeddings.tied,
+            )
+        except NoReferenceSetError:
+            if embeddings.tied:
+                raise
+            reference_ids: tuple[int, ...] | None = None
+        else:
+            reference_ids = reference.token_ids
+            # Which link of the chain supplied t_ref moves every cosine value,
+            # and §9 has no field for it. The warnings array is where a choice
+            # that changes the numbers goes.
+            warnings.append(
+                f"reference set t_ref taken from {reference.source.value} "
+                f"({len(reference.token_ids)} tokens); §7.9's chain is ordered, "
+                f"so a checkpoint with a different spare-token layout resolves "
+                f"to a different set and different values"
+            )
+
+        detection = detect(
+            e_in=embeddings.e_in,
+            e_out=embeddings.e_in if embeddings.e_out is None else embeddings.e_out,
+            tied=embeddings.tied,
+            reference_ids=reference_ids,
+            excluded=tier0.stage1_exclusions(),
+            vocab_size=tier0.vocab_size,
+            top_pct=top_pct,
+            first_pc_removed=remove_first_pc,
+        )
+
+        return Tier2Report(
+            candidates=_candidates(detection, vocab=vocab, family=tier0.family),
+            indicator=detection.indicator,
+            tied=embeddings.tied,
+            top_pct=top_pct,
+            candidates_pre_exclusion=detection.pre_exclusion,
+            candidates_post_exclusion=detection.post_exclusion,
+            confidence=detection.confidence,
+            indicator_agreement=detection.agreement,
+            first_pc_removed=detection.first_pc_removed,
+            warnings=(*warnings, *detection.warnings),
+        )

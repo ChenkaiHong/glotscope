@@ -252,3 +252,70 @@ def test_an_out_of_range_top_pct_is_refused() -> None:
             vocab_size=2,
             top_pct=0.0,
         )
+
+
+def test_an_untied_checkpoint_degrades_to_l2_when_no_reference_set_exists() -> None:
+    # §7.9's table: L2(E_in) alone needs no reference set, so an exhausted chain
+    # is a degradation for an untied checkpoint, not a refusal. The refusal
+    # belongs to the tied case, where nothing else can run.
+    # Arrange
+    e_in = np.array([[0.1, 0.0], [1.0, 0.0], [2.0, 0.0]])
+    e_out = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+
+    # Act
+    result = detect(
+        e_in=e_in,
+        e_out=e_out,
+        tied=False,
+        reference_ids=None,
+        excluded=frozenset(),
+        vocab_size=3,
+        top_pct=100.0,
+    )
+
+    # Assert
+    assert result.indicator is Indicator.L2_E_IN
+    assert result.ranked[0][0] == 0
+    assert result.agreement is None
+
+
+def test_the_degraded_run_is_not_reported_as_high_confidence() -> None:
+    # D10 exists because running one indicator alone and trusting it is the
+    # failure mode. When the second cannot run, saying so is the whole point.
+    # Arrange
+    e_in = np.array([[0.1, 0.0], [1.0, 0.0], [2.0, 0.0]])
+    e_out = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+
+    # Act
+    result = detect(
+        e_in=e_in,
+        e_out=e_out,
+        tied=False,
+        reference_ids=None,
+        excluded=frozenset(),
+        vocab_size=3,
+        top_pct=100.0,
+    )
+
+    # Assert
+    assert result.confidence is Confidence.LOW_CONFIDENCE
+    assert any("reference set" in warning for warning in result.warnings)
+
+
+def test_a_tied_checkpoint_cannot_run_without_a_reference_set() -> None:
+    # The cosine indicator is the only one available when tied, and it is
+    # defined against u_ref. There is nothing to degrade to.
+    # Arrange
+    e_out = np.array([[1.0, 0.0], [0.0, 1.0]])
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="tied"):
+        detect(
+            e_in=e_out,
+            e_out=e_out,
+            tied=True,
+            reference_ids=None,
+            excluded=frozenset(),
+            vocab_size=2,
+            top_pct=100.0,
+        )

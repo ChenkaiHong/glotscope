@@ -29,25 +29,16 @@ def test_cli_without_a_command_prints_help_and_returns_nonzero(
     assert captured.err == ""
 
 
-@pytest.mark.parametrize(
-    ("argv", "command", "milestone"),
-    [
-        (["detect", "acme/tokenizer", "--weights", "weights.safetensors"], "detect", "M2 (Tier 2)"),
-        (["leaderboard", "--config", "board.toml", "--out", "board.json"], "leaderboard", "M3"),
-    ],
-)
-def test_each_unbuilt_subcommand_refuses_cleanly(
-    argv: list[str],
-    command: str,
-    milestone: str,
+def test_the_one_unbuilt_subcommand_refuses_cleanly(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    assert main(argv) == 2
+    # `detect` used to be here and is now implemented — see tests/test_cli_detect.py.
+    assert main(["leaderboard", "--config", "board.toml", "--out", "board.json"]) == 2
 
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == (
-        f"glotscope {command}: not implemented in this release. Scheduled for {milestone}.\n"
+        "glotscope leaderboard: not implemented in this release. Scheduled for M3.\n"
     )
 
 
@@ -100,21 +91,9 @@ def test_embeddings_only_advertise_original_precision_float_dtypes() -> None:
     assert {"int4", "int8", "uint8"}.isdisjoint(ALLOWED_DTYPES)
 
 
-def test_the_hub_and_manifest_paths_explicitly_refuse_until_implemented() -> None:
-    # `from_file` is implemented — see tests/test_embeddings_loading.py. These
-    # two are not, and say so rather than returning something empty.
-    embeddings = Embeddings(
-        e_in=np.empty((4, 2), dtype=np.float32),
-        e_out=None,
-        tied=True,
-        dtype="float16",
-        shard_sha256="c" * 64,
-        checkpoint="acme/model",
-        n_rows=4,
-        vocab_size=4,
-    )
-
+def test_the_hub_path_explicitly_refuses_until_implemented() -> None:
+    # `from_file` and `manifest` are implemented — see
+    # tests/test_embeddings_loading.py. Resolving a checkpoint from the Hub is
+    # not, and says so rather than returning something empty.
     with pytest.raises(NotImplementedError):
         Embeddings.from_checkpoint("acme/model", revision="deadbeef")
-    with pytest.raises(NotImplementedError):
-        _ = embeddings.manifest

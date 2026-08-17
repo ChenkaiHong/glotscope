@@ -32,6 +32,7 @@ from glotscope.enums import (
 
 __all__ = [
     "SCHEMA_VERSION",
+    "UNKNOWN_LICENSE",
     "CorpusManifest",
     "EnvironmentManifest",
     "Manifest",
@@ -42,6 +43,14 @@ __all__ = [
     "canonical_json",
     "environment",
 ]
+
+UNKNOWN_LICENSE = "UNKNOWN"
+"""Recorded where no SPDX identifier is knowable from the artifact itself.
+
+A local ``tokenizer.json`` or ``safetensors`` file carries no license metadata
+and the repository it was exported from is not recoverable from the bytes.
+``--license-filter=commercial`` reads these fields, so an unverifiable guess here
+would be worse than an explicit unknown."""
 
 SCHEMA_VERSION = "1.2"
 """Bumped whenever any serialized key or enum value changes.

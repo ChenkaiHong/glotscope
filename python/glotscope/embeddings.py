@@ -27,14 +27,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from glotscope.errors import UnsupportedCheckpointError
+from glotscope.manifest import UNKNOWN_LICENSE, WeightsManifest
 
 if TYPE_CHECKING:
     from typing import Any
 
     import numpy as np
     from numpy.typing import NDArray
-
-    from glotscope.manifest import WeightsManifest
 
     FloatMatrix = NDArray[np.floating[Any]]
     """Any original-precision float matrix. Deliberately not pinned to one dtype:
@@ -190,6 +189,12 @@ class Embeddings:
 
     vocab_size: int
 
+    license_spdx: str = UNKNOWN_LICENSE
+    """SPDX identifier of the weights, which is a different licence from the
+    tokenizer's. A local file carries none, and the repository it was exported
+    from is not recoverable from the bytes, so it stays ``UNKNOWN`` rather than
+    inheriting anything — ``--license-filter=commercial`` reads this field."""
+
     @property
     def padding_rows(self) -> tuple[int, ...]:
         """Embedding rows above ``|V|``, a reference-set source (§7.9 chain link 2)."""
@@ -215,7 +220,11 @@ class Embeddings:
                 still producing plausible-looking numbers, which is the worst
                 possible failure mode for a tool whose output other people cite.
         """
-        raise NotImplementedError
+        raise NotImplementedError(
+            f"resolving {model_id!r} from the Hub is not implemented in this "
+            f"release. Download the checkpoint and pass the safetensors file "
+            f"holding the embedding tensors to Embeddings.from_file()."
+        )
 
     @classmethod
     def from_file(cls, path: str | Path, *, vocab_size: int) -> Embeddings:
@@ -259,5 +268,16 @@ class Embeddings:
 
     @property
     def manifest(self) -> WeightsManifest:
-        """Weight provenance, ready to embed in a result (§9)."""
-        raise NotImplementedError
+        """Weight provenance, ready to embed in a result (§9).
+
+        ``dtype`` is what the checkpoint holds, not what these arrays are: BF16
+        is widened to float32 on read because numpy has no bfloat16, and
+        recording float32 here would erase the distinction the field exists to
+        preserve.
+        """
+        return WeightsManifest(
+            shard_sha256=self.shard_sha256,
+            dtype=self.dtype,
+            tied_embeddings=self.tied,
+            license_spdx=self.license_spdx,
+        )

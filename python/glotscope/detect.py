@@ -146,12 +146,46 @@ def _remove_first_principal_component(matrix: FloatMatrix) -> FloatMatrix:
     return projected
 
 
+def _detection(
+    *,
+    rows: FloatVector,
+    values: FloatVector,
+    indicator: Indicator,
+    agreement: float | None,
+    confidence: Confidence,
+    vocab_size: int,
+    candidate_count: int,
+    top_pct: float,
+    first_pc_removed: bool,
+    warnings: list[str],
+) -> Detection:
+    """Rank ascending and keep the top share, for either indicator.
+
+    Both indicators are low-implies-under-trained, so one ascending sort serves
+    both and there is no branch here that could invert one of them.
+    """
+    import numpy as np
+
+    order = np.argsort(values, kind="stable")
+    keep = max(1, int(candidate_count * top_pct / 100.0))
+    return Detection(
+        ranked=tuple((int(rows[index]), float(values[index])) for index in order[:keep]),
+        indicator=indicator,
+        agreement=agreement,
+        confidence=confidence,
+        pre_exclusion=vocab_size,
+        post_exclusion=candidate_count,
+        first_pc_removed=first_pc_removed,
+        warnings=tuple(warnings),
+    )
+
+
 def detect(
     *,
     e_in: FloatMatrix,
     e_out: FloatMatrix,
     tied: bool,
-    reference_ids: Iterable[int],
+    reference_ids: Iterable[int] | None,
     excluded: frozenset[int],
     vocab_size: int,
     top_pct: float = 2.0,
@@ -165,7 +199,10 @@ def detect(
         tied: whether the checkpoint ties its embeddings. Decides how many
             indicators exist, not merely which one is preferred.
         reference_ids: ``t_ref``, resolved by
-            :func:`~glotscope.reference_set.resolve_reference_set`.
+            :func:`~glotscope.reference_set.resolve_reference_set`. ``None`` when
+            the fallback chain was exhausted, which §7.9's table allows only for
+            an untied checkpoint — ``L2(E_in)`` then runs alone, at
+            ``LOW_CONFIDENCE``.
         excluded: §7.9 Stage 1 exclusions — partial-UTF-8, unreachable and
             special ids.
         vocab_size: ``|V|``. Rows above it are padding, never candidates.
@@ -174,9 +211,10 @@ def detect(
             shows no consistent improvement from it.
 
     Raises:
-        ValueError: if ``top_pct`` is outside ``(0, 100]``, or if Stage 1
-            excluded the whole vocabulary — an empty candidate set drawn from an
-            empty domain is not a finding.
+        ValueError: if ``top_pct`` is outside ``(0, 100]``; if Stage 1 excluded
+            the whole vocabulary — an empty candidate set drawn from an empty
+            domain is not a finding; or if ``reference_ids`` is ``None`` for a
+            tied checkpoint, which leaves no indicator that can run.
     """
     import numpy as np
 
@@ -201,13 +239,46 @@ def detect(
             "consistent improvement from it across seven models"
         )
 
+    if reference_ids is None and tied:
+        raise ValueError(
+            "a tied checkpoint has only the cosine indicator, and that indicator "
+            "is defined against u_ref. With no reference set there is nothing to "
+            "degrade to, so this is a refusal rather than a warning."
+        )
+
     rows = np.asarray(candidate_ids)
+    agreement: float | None = None
+    confidence = Confidence.HIGH
+
+    if reference_ids is None:
+        # §7.9's untied row: L2(E_in) alone needs no reference set. Degrading is
+        # what that table prescribes — but not at HIGH confidence, because D10's
+        # position is precisely that one indicator is never run alone and trusted.
+        indicator = Indicator.L2_E_IN
+        values = np.linalg.norm(scored_in[rows], axis=1)
+        confidence = Confidence.LOW_CONFIDENCE
+        warnings.append(
+            "the reference set fallback chain was exhausted, so the cosine "
+            "indicator could not run. Ranking is by L2(E_in) alone and no "
+            "agreement was measurable; treat the candidate set as provisional"
+        )
+        return _detection(
+            rows=rows,
+            values=values,
+            indicator=indicator,
+            agreement=agreement,
+            confidence=confidence,
+            vocab_size=vocab_size,
+            candidate_count=len(candidate_ids),
+            top_pct=top_pct,
+            first_pc_removed=first_pc_removed,
+            warnings=warnings,
+        )
+
     reference_rows = np.asarray(sorted(set(reference_ids)))
     u_ref = scored_out[reference_rows].mean(axis=0)
     cosine = cosine_distance(scored_out[rows], u_ref)
 
-    agreement: float | None = None
-    confidence = Confidence.HIGH
     if tied:
         indicator = Indicator.COSINE_TO_UNUSED_MEAN
         values = cosine
@@ -223,17 +294,15 @@ def detect(
                 f"L2(E_in); treat the candidate set as provisional"
             )
 
-    order = np.argsort(values, kind="stable")
-    keep = max(1, int(len(candidate_ids) * top_pct / 100.0))
-    ranked = tuple((int(rows[index]), float(values[index])) for index in order[:keep])
-
-    return Detection(
-        ranked=ranked,
+    return _detection(
+        rows=rows,
+        values=values,
         indicator=indicator,
         agreement=agreement,
         confidence=confidence,
-        pre_exclusion=vocab_size,
-        post_exclusion=len(candidate_ids),
+        vocab_size=vocab_size,
+        candidate_count=len(candidate_ids),
+        top_pct=top_pct,
         first_pc_removed=first_pc_removed,
-        warnings=tuple(warnings),
+        warnings=warnings,
     )

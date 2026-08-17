@@ -17,44 +17,14 @@ headers of the three reference checkpoints without downloading any weights:
 from __future__ import annotations
 
 import hashlib
-import json
-import struct
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from _safetensors import bf16, f32, write_safetensors
 from glotscope.embeddings import Embeddings
 from glotscope.errors import UnsupportedCheckpointError
-
-
-def write_safetensors(path: Path, tensors: dict[str, tuple[str, list[int], bytes]]) -> Path:
-    """Write a minimal safetensors file: u64 header length, JSON header, buffer.
-
-    Values are ``(dtype, shape, raw bytes)`` so a test can place BF16 — or a
-    quantized dtype that must be refused — on disk exactly as a checkpoint does.
-    """
-    header: dict[str, object] = {}
-    buffer = bytearray()
-    for name, (dtype, shape, payload) in tensors.items():
-        start = len(buffer)
-        buffer.extend(payload)
-        header[name] = {"dtype": dtype, "shape": shape, "data_offsets": [start, len(buffer)]}
-    encoded = json.dumps(header).encode("utf-8")
-    path.write_bytes(struct.pack("<Q", len(encoded)) + encoded + bytes(buffer))
-    return path
-
-
-def f32(values: np.ndarray) -> tuple[str, list[int], bytes]:
-    array = np.ascontiguousarray(values, dtype=np.float32)
-    return "F32", list(array.shape), array.tobytes()
-
-
-def bf16(values: np.ndarray) -> tuple[str, list[int], bytes]:
-    """Truncate float32 to bfloat16 — the top 16 bits of each word."""
-    array = np.ascontiguousarray(values, dtype=np.float32)
-    truncated = (array.view(np.uint32) >> 16).astype(np.uint16)
-    return "BF16", list(array.shape), truncated.tobytes()
 
 
 def test_a_checkpoint_without_a_separate_head_is_read_as_tied(tmp_path: Path) -> None:
@@ -181,3 +151,51 @@ def test_a_file_with_no_embedding_tensor_names_what_it_looked_for(tmp_path: Path
     with pytest.raises(UnsupportedCheckpointError) as excinfo:
         Embeddings.from_file(path, vocab_size=2)
     assert "embed_tokens" in str(excinfo.value)
+
+
+def test_the_manifest_records_what_a_reader_needs_to_refuse_the_file_again(
+    tmp_path: Path,
+) -> None:
+    # §9's weights block exists so a reader can tell a bf16 checkpoint from a
+    # 4-bit mirror republished under the same name.
+    # Arrange
+    rows = np.arange(6, dtype=np.float32).reshape(2, 3)
+    path = write_safetensors(tmp_path / "model.safetensors", {"wte.weight": bf16(rows)})
+
+    # Act
+    manifest = Embeddings.from_file(path, vocab_size=2).manifest
+
+    # Assert
+    assert manifest.dtype == "bfloat16"
+    assert manifest.tied_embeddings is True
+    assert manifest.shard_sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_a_local_file_declares_no_license_rather_than_borrowing_one(tmp_path: Path) -> None:
+    # A safetensors file on disk carries no license metadata, and the repository
+    # it came from is not knowable from the bytes. Recording anything else would
+    # put an unverifiable claim in the field a `--license-filter` run trusts.
+    # Arrange
+    rows = np.zeros((2, 3), dtype=np.float32)
+    path = write_safetensors(tmp_path / "model.safetensors", {"wte.weight": f32(rows)})
+
+    # Act
+    manifest = Embeddings.from_file(path, vocab_size=2).manifest
+
+    # Assert
+    assert manifest.license_spdx == "UNKNOWN"
+
+
+def test_an_untied_checkpoint_says_so_in_its_manifest(tmp_path: Path) -> None:
+    # Arrange
+    rows = np.zeros((2, 3), dtype=np.float32)
+    path = write_safetensors(
+        tmp_path / "model.safetensors",
+        {"model.embed_tokens.weight": bf16(rows), "lm_head.weight": bf16(rows)},
+    )
+
+    # Act
+    manifest = Embeddings.from_file(path, vocab_size=2).manifest
+
+    # Assert
+    assert manifest.tied_embeddings is False
