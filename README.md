@@ -10,9 +10,11 @@ It is the first package to span corpus metrics *and* model-weight metrics. Exist
 suites stop at the tokenizer; the existing glitch-token detector starts at the weights and is not
 installable.
 
-> **Status: v0.1.0 prepared, not yet published.** Tier 0 and Tier 1 are implemented and tested, and
-> `glotscope lint`, `analyze`, `compare` and `verify` run. `detect` (Tier 2) and `leaderboard` are
-> scheduled and exit 2 rather than guessing. The only release on PyPI is the 0.0.0 name reservation.
+> **Status: v0.1.0 prepared, not yet published.** Tiers 0, 1 and 2 are implemented and tested, and
+> `glotscope lint`, `analyze`, `detect`, `compare` and `verify` run. `leaderboard` is scheduled and
+> exits 2 rather than guessing. Tier 2's indicators are not yet validated against the published
+> candidate sets, and morphology computes but no corpus loader feeds it — both are recorded in
+> [`divergences.md`](docs/divergences.md). The only release on PyPI is the 0.0.0 name reservation.
 > See the [`build order and open questions`](docs/build-order.md).
 
 ## What these metrics do and do not tell you
