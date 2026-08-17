@@ -22,6 +22,8 @@ install that never included this tier.
 from __future__ import annotations
 
 import hashlib
+import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -40,7 +42,11 @@ if TYPE_CHECKING:
     checkpoints ship float32, float16 and bfloat16, and narrowing the annotation
     would push a cast into every reader."""
 
-__all__ = ["ALLOWED_DTYPES", "Embeddings"]
+__all__ = ["ALLOWED_DTYPES", "Embeddings", "embedding_shards"]
+
+_INDEX_FILE = "model.safetensors.index.json"
+_SINGLE_FILE = "model.safetensors"
+_CONFIG_FILE = "config.json"
 
 ALLOWED_DTYPES = frozenset({"float32", "float16", "bfloat16", "float64"})
 """Original-precision floating dtypes. Anything else — 4-bit, 8-bit, GGUF
@@ -119,7 +125,26 @@ def _deserialize(blob: bytes) -> list[tuple[str, dict[str, Any]]]:
     return parsed
 
 
-def _first_present(tensors: dict[str, Any], names: tuple[str, ...]) -> str | None:
+def _hub() -> tuple[Any, Any]:
+    """``(hf_hub_download, model_info)``, or a message naming the extra.
+
+    Looked up through the module rather than bound at import so a core install —
+    which promises Tier 0 and Tier 1 only — reports the missing extra by name
+    instead of failing at import. ``huggingface_hub`` arrives transitively
+    through ``tokenizers`` today; the ``tier2`` extra declares it so a resolver
+    that drops that edge does not break Tier 2 silently.
+    """
+    try:
+        import huggingface_hub
+    except ModuleNotFoundError as exc:  # pragma: no cover - exercised by the extra
+        raise ModuleNotFoundError(
+            "resolving a checkpoint needs `huggingface_hub`, which ships in the "
+            "`tier2` extra: pip install 'glotscope[tier2]'"
+        ) from exc
+    return huggingface_hub.hf_hub_download, huggingface_hub.model_info
+
+
+def _first_present(tensors: Mapping[str, Any], names: tuple[str, ...]) -> str | None:
     return next((name for name in names if name in tensors), None)
 
 
@@ -161,6 +186,56 @@ def _as_array(spec: dict[str, Any]) -> FloatMatrix:
     native = {"F64": np.float64, "F32": np.float32, "F16": np.float16}[spec["dtype"]]
     materialised: FloatMatrix = np.frombuffer(data, dtype=native).reshape(shape)
     return materialised
+
+
+def embedding_shards(weight_map: Mapping[str, str]) -> tuple[str, ...]:
+    """Which shard files hold ``E_in``/``E_out``, from a safetensors index.
+
+    This is the function that makes Tier 2 affordable. ``ai21labs/Jamba-v0.1``
+    keeps ``model.embed_tokens.weight`` in shard 1 of 21 and ``lm_head.weight``
+    in shard 21 — 8.94 GB of a 96.06 GB checkpoint — so reading the index and
+    fetching two files is the difference between seconds and a full download.
+
+    Deduplicated and returned in ``E_in``-then-``E_out`` order: a checkpoint that
+    keeps both in one shard must not fetch it twice.
+
+    Raises:
+        UnsupportedCheckpointError: if the index names no embedding tensor.
+            Downloading every shard on the chance one holds it is not a fallback
+            worth having.
+    """
+    e_in = _first_present(weight_map, _E_IN_NAMES)
+    if e_in is None:
+        raise UnsupportedCheckpointError(
+            "<index>",
+            f"the safetensors index names no embedding tensor. Looked for {', '.join(_E_IN_NAMES)}",
+        )
+    e_out = _first_present(weight_map, _E_OUT_NAMES)
+    ordered = [weight_map[e_in]] + ([weight_map[e_out]] if e_out is not None else [])
+    return tuple(dict.fromkeys(ordered))
+
+
+def _merge_shards(paths: Sequence[Path]) -> tuple[dict[str, Any], str]:
+    """Read every shard once and return its tensors plus one digest.
+
+    The digest over several shards is taken over the per-file digests, sorted by
+    name — so it covers every shard, does not depend on fetch order, and stays a
+    single 64-character field. One shard's own digest is used unchanged, which
+    keeps a single-file checkpoint's recorded hash the hash of the file a reader
+    can download and check by hand.
+    """
+    if len(paths) == 1:
+        blob = paths[0].read_bytes()
+        return dict(_deserialize(blob)), hashlib.sha256(blob).hexdigest()
+
+    tensors: dict[str, Any] = {}
+    digests: list[str] = []
+    for path in sorted(paths, key=lambda item: item.name):
+        blob = path.read_bytes()
+        tensors.update(dict(_deserialize(blob)))
+        digests.append(f"{path.name}:{hashlib.sha256(blob).hexdigest()}")
+    combined = "\n".join(digests).encode("utf-8")
+    return tensors, hashlib.sha256(combined).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,10 +295,35 @@ class Embeddings:
                 still producing plausible-looking numbers, which is the worst
                 possible failure mode for a tool whose output other people cite.
         """
-        raise NotImplementedError(
-            f"resolving {model_id!r} from the Hub is not implemented in this "
-            f"release. Download the checkpoint and pass the safetensors file "
-            f"holding the embedding tensors to Embeddings.from_file()."
+        download, model_info = _hub()
+        config = json.loads(
+            Path(download(model_id, _CONFIG_FILE, revision=revision)).read_text(encoding="utf-8")
+        )
+
+        from huggingface_hub.errors import EntryNotFoundError
+
+        try:
+            index = json.loads(
+                Path(download(model_id, _INDEX_FILE, revision=revision)).read_text(encoding="utf-8")
+            )
+        except EntryNotFoundError:
+            # An unsharded checkpoint publishes no index. gpt2-medium is one.
+            names: tuple[str, ...] = (_SINGLE_FILE,)
+        else:
+            names = embedding_shards(index["weight_map"])
+
+        paths = [Path(download(model_id, name, revision=revision)) for name in names]
+        card = getattr(model_info(model_id, revision=revision), "card_data", None) or {}
+        return cls._assemble(
+            paths,
+            vocab_size=int(config["vocab_size"]),
+            # The repo id, not the local cache path: a cache path is specific to
+            # one machine, and §9 identifies an artifact by its hash anyway.
+            checkpoint=model_id,
+            # The Hub's `license` is not always an SPDX identifier — gemma-2b
+            # declares "gemma". Recorded as published rather than coerced into
+            # something SPDX-shaped that no registry would recognise.
+            license_spdx=card.get("license") or UNKNOWN_LICENSE,
         )
 
     @classmethod
@@ -234,36 +334,48 @@ class Embeddings:
             UnsupportedCheckpointError: if no embedding tensor is present, or if
                 its dtype is not in :data:`ALLOWED_DTYPES`.
         """
-        blob = Path(path).read_bytes()
-        tensors = dict(_deserialize(blob))
+        return cls._assemble([Path(path)], vocab_size=vocab_size, checkpoint=str(path))
+
+    @classmethod
+    def _assemble(
+        cls,
+        paths: Sequence[Path],
+        *,
+        vocab_size: int,
+        checkpoint: str,
+        license_spdx: str = UNKNOWN_LICENSE,
+    ) -> Embeddings:
+        """Build from shards already on disk. One reader for both entry points."""
+        tensors, digest = _merge_shards(paths)
 
         e_in_name = _first_present(tensors, _E_IN_NAMES)
         if e_in_name is None:
             raise UnsupportedCheckpointError(
-                str(path),
+                checkpoint,
                 f"no embedding tensor found. Looked for {', '.join(_E_IN_NAMES)}; "
                 f"the file holds {', '.join(sorted(tensors)[:8])}",
             )
 
-        dtype = _float_dtype(tensors[e_in_name]["dtype"], str(path))
+        dtype = _float_dtype(tensors[e_in_name]["dtype"], checkpoint)
         e_out_name = _first_present(tensors, _E_OUT_NAMES)
         if e_out_name is not None:
-            _float_dtype(tensors[e_out_name]["dtype"], str(path))
+            _float_dtype(tensors[e_out_name]["dtype"], checkpoint)
 
         e_in = _as_array(tensors[e_in_name])
         return cls(
             e_in=e_in,
             e_out=None if e_out_name is None else _as_array(tensors[e_out_name]),
-            # Tying is read off the file rather than off a config flag:
+            # Tying is read off the shards rather than off a config flag:
             # `tie_word_embeddings` is absent from gemma-2b's config entirely,
             # and the absence of a separate head is the fact that decides which
             # indicators can run.
             tied=e_out_name is None,
             dtype=dtype,
-            shard_sha256=hashlib.sha256(blob).hexdigest(),
-            checkpoint=str(path),
+            shard_sha256=digest,
+            checkpoint=checkpoint,
             n_rows=int(e_in.shape[0]),
             vocab_size=vocab_size,
+            license_spdx=license_spdx,
         )
 
     @property

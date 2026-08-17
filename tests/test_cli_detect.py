@@ -120,20 +120,44 @@ def test_a_tied_checkpoint_with_no_reference_set_is_a_typed_refusal(
     assert "reference set" in capsys.readouterr().err
 
 
-def test_a_hub_identifier_for_the_weights_is_reported_as_unbuilt(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_a_bare_repo_id_is_routed_to_the_hub_and_not_to_the_filesystem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Exit 2. Saying "no such file" would send the reader after the wrong fix.
+    # The routing is the claim: a bare name is a Hub identifier, and reporting
+    # it as a missing local file would send the reader after the wrong fix. The
+    # Hub is mocked at the file-fetch seam so this asserts routing without
+    # making the suite depend on huggingface.co being up.
     # Arrange
     tokenizer = tmp_path / "tokenizer.json"
-    _tokenizer(tokenizer, byte_values=range(256))
+    rows = _tokenizer(tokenizer, byte_values=range(256))
+    _weights(tmp_path / "model.safetensors", rows)
+    (tmp_path / "config.json").write_text(json.dumps({"vocab_size": rows}), encoding="utf-8")
+    asked: list[str] = []
+
+    def _download(repo_id: str, filename: str, *, revision: str | None = None) -> str:
+        from huggingface_hub.errors import EntryNotFoundError
+
+        asked.append(f"{repo_id}/{filename}")
+        if filename == "model.safetensors.index.json":
+            raise EntryNotFoundError(filename)
+        return str(tmp_path / filename)
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", _download)
+    monkeypatch.setattr(
+        huggingface_hub,
+        "model_info",
+        lambda repo_id, revision=None: type("Info", (), {"card_data": {"license": "mit"}})(),
+    )
 
     # Act
-    code = main(["detect", str(tokenizer), "--weights", "google/gemma-2b"])
+    code = main(["detect", str(tokenizer), "--weights", "acme/tiny"])
 
     # Assert
-    assert code == 2
-    assert "not implemented" in capsys.readouterr().err.lower()
+    assert code == 0
+    assert "acme/tiny/config.json" in asked
+    assert json.loads(capsys.readouterr().out)["manifest"]["weights"]["license_spdx"] == "mit"
 
 
 def test_a_mistyped_weights_path_is_a_wrong_argument_not_a_missing_feature(

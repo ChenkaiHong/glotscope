@@ -270,15 +270,17 @@ def _load_tokenizer(source: str, revision: str | None) -> Tokenizer:
 def _load_embeddings(source: str, *, vocab_size: int) -> Embeddings:
     """Load the weights named on the command line.
 
-    Mirrors :func:`_load_tokenizer`'s three-way answer, and for the same reason:
-    a path that does not exist is a wrong argument to fix now (exit 1), while a
-    Hub identifier is a feature scheduled for a later release (exit 2). Collapsing
-    them would send a reader after the wrong fix.
+    A bare name is a Hub identifier and is resolved as one; anything that names
+    a place on this disk is read from there. Collapsing the two would report a
+    mistyped path as a missing model, or a model as a mistyped path, and send
+    the reader after the wrong fix either way.
+
+    Unlike the tokenizer, the Hub path here is implemented:
+    ``Embeddings.from_checkpoint`` reads only the shards holding the embedding
+    tensors, which is 8.94 GB of Jamba's 96.06 GB rather than all of it.
 
     Raises:
         FileNotFoundError: the source names a place on this disk holding nothing.
-        NotImplementedError: the source is a Hub identifier;
-            ``Embeddings.from_checkpoint`` is not implemented in this release.
     """
     path = Path(source)
     if path.is_file():

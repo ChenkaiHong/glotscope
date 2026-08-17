@@ -91,9 +91,5 @@ def test_embeddings_only_advertise_original_precision_float_dtypes() -> None:
     assert {"int4", "int8", "uint8"}.isdisjoint(ALLOWED_DTYPES)
 
 
-def test_the_hub_path_explicitly_refuses_until_implemented() -> None:
-    # `from_file` and `manifest` are implemented — see
-    # tests/test_embeddings_loading.py. Resolving a checkpoint from the Hub is
-    # not, and says so rather than returning something empty.
-    with pytest.raises(NotImplementedError):
-        Embeddings.from_checkpoint("acme/model", revision="deadbeef")
+# `from_file`, `manifest` and `from_checkpoint` are all implemented now — see
+# tests/test_embeddings_loading.py and tests/test_embeddings_checkpoint.py.
