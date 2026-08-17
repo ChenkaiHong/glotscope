@@ -60,6 +60,12 @@ segmenters = [
 tier2 = [
     "safetensors>=0.4",
     "numpy>=1.24,<2.5",
+    # Declared rather than inherited. `tokenizers` pulls huggingface_hub in
+    # transitively today, so `from_checkpoint` would appear to work on a machine
+    # that never asked for it and break on the first resolver that does not —
+    # the failure G1's clean-install promise exists to catch, arriving as a bare
+    # ModuleNotFoundError at Tier 2 rather than at install time.
+    "huggingface_hub>=0.34",
 ]
 # tiktoken encodings are one of the three §8.1 entry points, and the only one
 # that needs a second tokenizer library.
@@ -78,6 +84,7 @@ dev = [
     # split above invisible to CI.
     "safetensors>=0.4",
     "numpy>=1.24,<2.5",
+    "huggingface_hub>=0.34",
     "tiktoken>=0.7",
 ]
 
