@@ -32,24 +32,30 @@ row. Glotscope validates Gini with hand-computed and property tests until reprod
 artifacts exist; it does not reconstruct and tune a tokenizer to the published numbers. See
 [`m0-source-audit.md`](m0-source-audit.md#u3-parity-aware-bpe-artifacts).
 
-## Morphology (§7.7) is not implemented in v0.1.0
+## Morphology (§7.7) computes, but no corpus feeds it yet
 
-**Status:** not a divergence in the numerical sense — a stated absence. No gate.
+**Status:** a stated absence, narrower than it was. The measures themselves are gated.
 
-§7.7's three measures (MorphScore v1, v2, and full alignment against MorphyNet) are **not
-implemented**. `MorphologyResult` and the `align_boundaries` fold pin the contract, and the
-`gathered → boundary-F1 0.25` value from U2 is reproduced against that contract, but nothing computes
-the measures over a corpus and no run emits them.
+All three §7.7 measures are implemented in `morphology.py` — MorphScore v1 (binary accuracy on the
+annotated stem–suffix boundary), MorphScore v2 (P/R/F1 over that same boundary), and full alignment
+(P/R/F1 over *all* boundaries, suffix–suffix included). `gathered → g/a/t/h/e/r/e/d` reproduces
+boundary-F1 `0.25` exactly and is a gate; the derived Turkish `2/3` is tested as the entry above
+prescribes.
+
+What is **not** built is the path from a corpus to those measures: nothing parses MorphyNet's TSVs
+into gold segmentations, and `analyze` neither requests nor emits a `MorphologyResult`. The registry
+entry `morphynet` exists with its download recipe and `MORPH_GOLD` capability, and glotscope ships no
+corpora (D12), so the gap is the loader rather than the metric.
 
 Recorded here because G3's exit condition is that every §7 subsection has either a reference test or
-an entry in this file, and an unimplemented metric with no entry is precisely the silent hole that
-condition exists to prevent. A reader comparing glotscope against a tool that publishes morphology
-numbers should know the difference is "not built" rather than "measured and disagreed".
+an entry in this file, and a metric that is computable but unreachable from a run is exactly the kind
+of half-state that reads as "implemented" in a feature list. A reader comparing glotscope against a
+tool that publishes morphology numbers should know that glotscope currently publishes none.
 
-Two things that stay true when it is built, both already enforced by the contract: precision is
-non-optional in the return type (D11) — recall alone rewards oversegmentation, and reporting it alone
-is misinformation — and Semitic root-and-pattern and isolating languages return
-`TypologicalScope.OUT_OF_SCOPE` rather than a number, even though the reference implementation
+Two properties are enforced by the types rather than by convention: precision is non-optional in the
+return type (D11) — recall alone rewards oversegmentation, and a character-level tokenizer earns
+perfect recall on `gathered` — and Semitic root-and-pattern and isolating languages return
+`TypologicalScope.OUT_OF_SCOPE` carrying no numbers at all, even though the reference implementation
 publishes numbers there (see the next entry).
 
 ## Morphological alignment outside typological scope
