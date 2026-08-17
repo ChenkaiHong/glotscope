@@ -49,14 +49,28 @@ _PER_LANGUAGE_METRICS = (
     "roundtrip_rate",
 )
 _CORPUS_LEVEL_METRICS = ("gini", "renyi_efficiency")
+_TIER0_METRICS = (
+    "vocab_size",
+    "ill_formed_vocab_rate",
+    "unreachable_count",
+    "byte_fallback_coverage",
+)
 
-METRICS: tuple[str, ...] = (*_PER_LANGUAGE_METRICS, "parity", *_CORPUS_LEVEL_METRICS)
+METRICS: tuple[str, ...] = (
+    *_TIER0_METRICS,
+    *_PER_LANGUAGE_METRICS,
+    "parity",
+    *_CORPUS_LEVEL_METRICS,
+)
 """Every metric ``compare`` can table, in the §9 document's own names."""
 
 _CORPUS_ROW = "corpus"
 """Row label for a metric that has one value per result rather than one per
 language. Gini and Renyi efficiency are properties of the whole evaluated
 language set, and giving them a per-language row would invent structure."""
+
+_VOCAB_ROW = "vocab"
+"""Row label for a Tier 0 metric, which describes the vocabulary and no corpus."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +191,13 @@ def _compression_unit(result: LoadedResult) -> frozenset[object]:
 
 
 def _metric_key(result: LoadedResult, metric: str) -> Mapping[str, object]:
+    if metric in _TIER0_METRICS:
+        # Nothing. A Tier 0 number is a property of the tokenizer artifact and
+        # of nothing else — no corpus, no segmenter, no normalization — which is
+        # the definition of the tier (§6). Requiring the corpora to agree before
+        # two vocabularies may be tabled would refuse a comparison that is
+        # always valid, and an over-refusing tool gets routed around.
+        return {}
     key = _shared_key(result)
     parameters = result.manifest.parameters
     if metric in ("fertility", "p_continued"):
@@ -197,6 +218,8 @@ def _metric_key(result: LoadedResult, metric: str) -> Mapping[str, object]:
 
 
 def _values(result: LoadedResult, metric: str) -> Mapping[str, float | None]:
+    if metric in _TIER0_METRICS:
+        return {_VOCAB_ROW: result.tier0.get(metric)}
     if metric == "parity":
         parity: Mapping[str, Any] = _corpus_level(result).get("parity", {})
         per_language: Mapping[str, Any] = parity.get("per_language", {})

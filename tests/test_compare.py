@@ -164,6 +164,43 @@ def test_an_unknown_metric_names_the_ones_that_exist(tmp_path: Path) -> None:
     assert "perplexity" in str(excinfo.value)
 
 
+def _lint_document() -> dict[str, Any]:
+    """What `glotscope lint` writes: tier0, and no corpus at all."""
+    document = _document()
+    del document["tier1"]
+    del document["manifest"]["corpus"]
+    return document
+
+
+def test_two_lint_documents_table_a_tier0_metric(tmp_path: Path) -> None:
+    # Arrange
+    left = _write(tmp_path / "a.json", _lint_document())
+    right = _write(tmp_path / "b.json", _other_tokenizer(_lint_document()))
+
+    # Act
+    table = compare([left, right], metric="ill_formed_vocab_rate")
+
+    # Assert
+    assert table.rows == {"vocab": (0.5, 0.5)}
+
+
+def test_a_tier0_metric_needs_no_corpus_agreement(tmp_path: Path) -> None:
+    # Tier 0 is a property of the tokenizer artifact alone. Refusing to compare
+    # two vocabularies because they were later run against different corpora
+    # would be over-refusal, and an over-refusing tool gets routed around.
+    # Arrange
+    left = _write(tmp_path / "a.json", _lint_document())
+    other = _other_tokenizer(_document())
+    other["manifest"]["corpus"]["languages"] = ["eng_Latn"]
+    right = _write(tmp_path / "b.json", other)
+
+    # Act
+    table = compare([left, right], metric="unreachable_count")
+
+    # Assert
+    assert table.rows == {"vocab": (131, 131)}
+
+
 def test_a_tier0_only_document_is_refused_by_name(tmp_path: Path) -> None:
     # What `glotscope lint` writes. It has no corpus metric to compare, and the
     # message has to say which command produces one.
