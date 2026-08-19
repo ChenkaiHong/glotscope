@@ -251,13 +251,25 @@ def morphology(
 
     scored = [word for word in words if include_single_token_words or not word.is_single_token]
     predicted = [sorted(word.predicted_boundaries) for word in scored]
+    # The check above guards the *input*; `scored` can still be empty after the
+    # filter, when a vocabulary emits every gold form whole and the caller asked
+    # to exclude one-token words. `_counts` over nothing returns
+    # BoundaryCounts(0, 0, 0), whose precision, recall and F1 all read 0.0 — the
+    # same "this tokenizer aligns nothing" claim the refusal above exists to
+    # prevent, published where a reader cannot tell it apart from a measurement.
+    # `None` is what `_accuracy` already returns in that position, and it says
+    # the honest thing: nothing was measurable.
     return MorphologyResult(
         language=language,
         morphological_type=morphological_type,
         scope=scope,
         morphscore_v1=_accuracy(words),
-        morphscore_v2=_counts(predicted, [sorted(w.stem_suffix_boundary) for w in scored]),
-        full_alignment=_counts(predicted, [sorted(w.gold_boundaries) for w in scored]),
+        morphscore_v2=(
+            _counts(predicted, [sorted(w.stem_suffix_boundary) for w in scored]) if scored else None
+        ),
+        full_alignment=(
+            _counts(predicted, [sorted(w.gold_boundaries) for w in scored]) if scored else None
+        ),
         frequency_weighted=frequency_weighted,
         include_single_token_words=include_single_token_words,
     )

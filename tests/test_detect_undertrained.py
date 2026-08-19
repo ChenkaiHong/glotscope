@@ -181,26 +181,61 @@ def test_a_tied_checkpoint_with_no_reference_set_is_refused(tmp_path: Path) -> N
         tokenizer.detect_undertrained(_embeddings(tokenizer), top_pct=5.0)
 
 
-def test_embeddings_built_for_a_different_vocabulary_are_refused(tmp_path: Path) -> None:
-    # Row i of E_in is token i or it is nothing. A silent mismatch would rank
-    # real tokens by another tokenizer's rows and still print a table.
+def test_an_embedding_matrix_smaller_than_the_vocabulary_is_refused(tmp_path: Path) -> None:
+    # Row i of E_in is token i or it is nothing. A matrix with fewer rows than
+    # the vocabulary has no row for the tail of it, so ranking would index off
+    # the end — or, worse, quietly score a truncated domain.
     # Arrange
     tokenizer = _byte_level(tmp_path / "tokenizer.json", byte_values=range(256))
     built = _embeddings(tokenizer)
-    wrong = Embeddings(
-        e_in=built.e_in,
+    truncated = Embeddings(
+        e_in=built.e_in[:-3],
         e_out=None,
         tied=True,
         dtype="float32",
         shard_sha256="0" * 64,
         checkpoint="acme/other",
-        n_rows=built.n_rows,
-        vocab_size=built.vocab_size - 3,
+        n_rows=built.n_rows - 3,
+        vocab_size=built.vocab_size,
     )
 
     # Act / Assert
-    with pytest.raises(UnsupportedCheckpointError, match="vocabulary"):
-        tokenizer.detect_undertrained(wrong)
+    with pytest.raises(UnsupportedCheckpointError, match="no row"):
+        tokenizer.detect_undertrained(truncated)
+
+
+def test_a_config_vocab_size_above_the_tokenizers_is_analysed_not_refused(
+    tmp_path: Path,
+) -> None:
+    # The Qwen3 shape: config declares 151936, the tokenizer holds 151669. The
+    # gap is not a mismatch to refuse — it *is* chain link 2. TokenizerManifest
+    # records both fields precisely because "Tier 2's reference-set chain uses
+    # the gap", so refusing on the difference disables the padding-row fallback
+    # on exactly the checkpoints that have one.
+    # Arrange
+    tokenizer = _byte_level(tmp_path / "tokenizer.json", byte_values=range(256))
+    vocab_size = tokenizer.lint().vocab_size
+    padded = _embeddings(tokenizer, n_rows=vocab_size + 8)
+    declared = Embeddings(
+        e_in=padded.e_in,
+        e_out=None,
+        tied=True,
+        dtype="float32",
+        shard_sha256="0" * 64,
+        checkpoint="Qwen/Qwen3-shaped",
+        n_rows=vocab_size + 8,
+        # What config.json says, which is the row count and not the token count.
+        vocab_size=vocab_size + 8,
+    )
+
+    # Act
+    report = tokenizer.detect_undertrained(declared, top_pct=5.0)
+
+    # Assert
+    # The domain is the tokenizer's vocabulary, and the 8 rows above it were
+    # spent as t_ref rather than ranked as candidates.
+    assert report.candidates_pre_exclusion == vocab_size
+    assert any("padding_rows" in warning for warning in report.warnings)
 
 
 def test_a_unigram_tokenizer_is_analysed_but_warned_about(tmp_path: Path) -> None:

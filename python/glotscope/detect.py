@@ -26,6 +26,7 @@ matrices.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -105,10 +106,20 @@ def spearman(left: FloatVector, right: FloatVector) -> float:
     Ties get the mean of the ranks they span. Without that the coefficient is
     not Spearman's — and indicator values tie constantly, since embedding rows
     that never moved from a shared initialization have exactly equal norms.
+
+    Returns ``nan`` when either side is constant, because no rank correlation
+    exists there — every value shares one rank, so there is no variation to
+    correlate. That is the same answer ``corrcoef`` gives, arrived at without its
+    divide-by-zero ``RuntimeWarning``; the caller must decide what an undefined
+    agreement means, and :func:`detect` treats it as ``LOW_CONFIDENCE``.
     """
     import numpy as np
 
-    return float(np.corrcoef(_average_ranks(left), _average_ranks(right))[0, 1])
+    left_ranks = _average_ranks(left)
+    right_ranks = _average_ranks(right)
+    if float(left_ranks.std()) == 0.0 or float(right_ranks.std()) == 0.0:
+        return math.nan
+    return float(np.corrcoef(left_ranks, right_ranks)[0, 1])
 
 
 def cosine_distance(matrix: FloatMatrix, reference: FloatVector) -> FloatVector:
@@ -136,12 +147,22 @@ def cosine_distance(matrix: FloatMatrix, reference: FloatVector) -> FloatVector:
 
 
 def _remove_first_principal_component(matrix: FloatMatrix) -> FloatMatrix:
-    """Centre and project out the leading singular direction (D9, default OFF)."""
+    """Centre and project out the leading singular direction (D9, default OFF).
+
+    The leading direction comes from an eigendecomposition of the ``d x d`` Gram
+    matrix rather than an SVD of the ``n x d`` one. Both cost ``O(n d^2)`` flops,
+    but ``svd(..., full_matrices=False)`` also materialises ``U`` at the full
+    ``n x d`` — 2 GB on gemma-2b's 256000 x 2048, on top of the 2 GB copy of
+    ``centred`` — only to discard it, since ``right[0]`` is the sole output used.
+    The Gram matrix is ``d x d`` whatever ``n`` is, so peak memory stops scaling
+    with the vocabulary. Its eigenvectors are the right singular vectors.
+    """
     import numpy as np
 
     centred = matrix - matrix.mean(axis=0, keepdims=True)
-    _, _, right = np.linalg.svd(centred, full_matrices=False)
-    leading = right[0]
+    gram = centred.T @ centred
+    # `eigh` returns eigenvalues ascending, so the leading direction is last.
+    leading = np.linalg.eigh(gram)[1][:, -1]
     projected: FloatMatrix = centred - np.outer(centred @ leading, leading)
     return projected
 
@@ -277,6 +298,44 @@ def detect(
 
     reference_rows = np.asarray(sorted(set(reference_ids)))
     u_ref = scored_out[reference_rows].mean(axis=0)
+    if not float(np.linalg.norm(u_ref)) > 0.0:
+        # A zero u_ref has no direction, so every cosine collapses to exactly 1.0
+        # and the ranking degenerates to token-id order — a plausible-looking
+        # result that measures nothing. It is the normal case rather than an
+        # exotic one: chain link 2 is padding rows, and padding rows are usually
+        # exactly zero. `cosine_distance` guards a zero *row*; nothing guarded a
+        # zero *reference*, and that is the one that destroys the indicator
+        # rather than a single entry.
+        if tied:
+            raise ValueError(
+                f"the reference set resolved to {len(reference_rows)} rows whose "
+                f"mean is the zero vector, so u_ref has no direction and every "
+                f"cosine distance is exactly 1.0. A tied checkpoint has no other "
+                f"indicator to fall back to, so this is a refusal: the ranking "
+                f"would be token-id order wearing the name of a measurement."
+            )
+        indicator = Indicator.L2_E_IN
+        values = np.linalg.norm(scored_in[rows], axis=1)
+        confidence = Confidence.LOW_CONFIDENCE
+        warnings.append(
+            "the reference set's mean is the zero vector, so the cosine "
+            "indicator has no direction to measure against and could not run. "
+            "Ranking is by L2(E_in) alone and no agreement was measurable; "
+            "treat the candidate set as provisional"
+        )
+        return _detection(
+            rows=rows,
+            values=values,
+            indicator=indicator,
+            agreement=agreement,
+            confidence=confidence,
+            vocab_size=vocab_size,
+            candidate_count=len(candidate_ids),
+            top_pct=top_pct,
+            first_pc_removed=first_pc_removed,
+            warnings=warnings,
+        )
+
     cosine = cosine_distance(scored_out[rows], u_ref)
 
     if tied:
@@ -285,14 +344,31 @@ def detect(
     else:
         indicator = Indicator.L2_E_IN
         values = np.linalg.norm(scored_in[rows], axis=1)
-        agreement = spearman(values, cosine)
-        if agreement < AGREEMENT_THRESHOLD:
+        measured = spearman(values, cosine)
+        if math.isnan(measured):
+            # `corrcoef` divides by a standard deviation of zero when either
+            # indicator is constant across the domain — rows that never moved
+            # from a shared initialization have exactly equal norms, which is the
+            # tie case `spearman` documents. `nan < threshold` is False, so the
+            # disagreement branch would be skipped and HIGH published; the nan
+            # then reaches `canonical_json`, which sets `allow_nan=False` and
+            # kills the run after every number has already been computed.
             confidence = Confidence.LOW_CONFIDENCE
             warnings.append(
-                f"the two indicators disagree: Spearman rho {agreement:.3f} is "
-                f"below the {AGREEMENT_THRESHOLD} threshold. Ranking is by "
-                f"L2(E_in); treat the candidate set as provisional"
+                "agreement between the two indicators is undefined: one of them "
+                "is constant across the whole domain, so no rank correlation "
+                "exists. Ranking is by L2(E_in); treat the candidate set as "
+                "provisional"
             )
+        else:
+            agreement = measured
+            if agreement < AGREEMENT_THRESHOLD:
+                confidence = Confidence.LOW_CONFIDENCE
+                warnings.append(
+                    f"the two indicators disagree: Spearman rho {agreement:.3f} is "
+                    f"below the {AGREEMENT_THRESHOLD} threshold. Ranking is by "
+                    f"L2(E_in); treat the candidate set as provisional"
+                )
 
     return _detection(
         rows=rows,

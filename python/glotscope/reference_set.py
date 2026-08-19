@@ -37,15 +37,25 @@ from glotscope.lint import vocab_bytes
 __all__ = ["ReferenceSet", "resolve_reference_set"]
 
 _UNUSED_TOKEN = re.compile(
-    r"^<\|?(?:unused(?:[-_]?token)?|reserved[-_]special[-_]token|extra[-_]id)[-_]?\d+\|?>$",
+    r"^<\|?(?:unused(?:[-_]?token)?|reserved[-_]special[-_]token)[-_]?\d+\|?>$",
     re.IGNORECASE,
 )
 """Spellings the §11 roster actually uses.
 
-Gemma writes ``<unused0>``, Llama 3 writes ``<|reserved_special_token_0|>``, T5
-writes ``<extra_id_0>``. Matching bare ``<...>`` instead would sweep in ``<s>``,
-``</s>`` and ``<pad>`` — trained tokens, every one of them — and computing
-``u_ref`` from trained rows moves the yardstick with no error raised anywhere."""
+Gemma writes ``<unused0>``, Llama 3 writes ``<|reserved_special_token_0|>``.
+Matching bare ``<...>`` instead would sweep in ``<s>``, ``</s>`` and ``<pad>`` —
+trained tokens, every one of them — and computing ``u_ref`` from trained rows
+moves the yardstick with no error raised anywhere.
+
+**T5's ``<extra_id_N>`` is deliberately absent**, though it reads like a
+reserved slot and was matched here at first. It is not one: span corruption
+emits those sentinels in every training target, so across T5, mT5, Flan-T5 and
+UL2 their ``E_out`` rows are among the *best*-trained in the vocabulary.
+Averaging them into ``u_ref`` inverts the indicator — it then measures
+similarity-to-trained — while the manifest goes on reporting ``unused_tokens``
+as the source. A T5-family checkpoint now falls through to padding rows or
+spare bytes, or exhausts the chain and refuses, all three of which are honest
+answers where the fourth was not."""
 
 _NON_UTF8_BYTES = range(0xF5, 0x100)
 """Byte values that never appear in well-formed UTF-8 (§7.8, §7.9 chain link 3)."""

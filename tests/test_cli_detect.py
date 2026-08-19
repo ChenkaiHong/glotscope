@@ -42,6 +42,23 @@ def _weights(path: Path, rows: int) -> Path:
     return write_safetensors(path, {"wte.weight": f32(scale * np.full((rows, 4), 0.5))})
 
 
+def _weights_multi_direction(path: Path, rows: int) -> Path:
+    """Ascending row norms that do not all lie along one direction.
+
+    ``_weights`` is rank 1 by construction, which is what makes its ranking easy
+    to reason about. It is unusable for the first-principal-component flag: every
+    row of a rank-1 matrix is a multiple of the same vector, so projecting that
+    direction out leaves the zero matrix and there is no reference direction left
+    to measure against.
+    """
+    index = np.arange(1, rows + 1, dtype=np.float32)
+    columns = np.stack(
+        [index, index % 7, index % 3, np.ones(rows, dtype=np.float32)],
+        axis=1,
+    )
+    return write_safetensors(path, {"wte.weight": f32(columns)})
+
+
 def test_detect_writes_a_document_spanning_tier_zero_and_tier_two(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -219,10 +236,13 @@ def test_first_principal_component_removal_is_off_unless_asked_for(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # D9. Recorded either way, because it changes every value.
-    # Arrange
+    # Arrange — `_weights` is rank 1, and removing the first principal component
+    # from a rank-1 matrix leaves exactly the zero matrix, which detect() refuses
+    # rather than ranking by token id. That refusal is the point of the guard, so
+    # this test needs weights that still span a direction afterwards.
     tokenizer = tmp_path / "tokenizer.json"
     rows = _tokenizer(tokenizer, byte_values=range(256))
-    weights = _weights(tmp_path / "model.safetensors", rows)
+    weights = _weights_multi_direction(tmp_path / "model.safetensors", rows)
 
     # Act
     main(["detect", str(tokenizer), "--weights", str(weights), "--remove-first-pc"])

@@ -164,7 +164,7 @@ def test_an_untied_checkpoint_is_told_it_can_still_degrade() -> None:
 
 @pytest.mark.parametrize(
     "token",
-    ["<unused0>", "<unused_token7>", "<|reserved_special_token_3|>", "<extra_id_11>"],
+    ["<unused0>", "<unused_token7>", "<|reserved_special_token_3|>"],
 )
 def test_the_unused_spellings_the_roster_actually_uses_are_recognised(token: str) -> None:
     # Arrange
@@ -182,6 +182,27 @@ def test_the_unused_spellings_the_roster_actually_uses_are_recognised(token: str
 
     # Assert
     assert reference.token_ids == (1,)
+
+
+def test_t5_sentinels_are_not_treated_as_unused() -> None:
+    # `<extra_id_N>` reads like a reserved slot and is not one. T5's denoising
+    # objective emits those sentinels in every training target, so their E_out
+    # rows are among the best-trained in the vocabulary. Averaging them into
+    # u_ref measures similarity-to-trained under the name of its opposite, and
+    # nothing raises: the manifest warning still reads "unused_tokens".
+    # Arrange
+    vocab = {"hello": 0, "<extra_id_0>": 1, "<extra_id_1>": 2, "<extra_id_99>": 3}
+
+    # Act / Assert
+    with pytest.raises(NoReferenceSetError):
+        resolve_reference_set(
+            vocab,
+            TokenizerFamily.BYTE_LEVEL,
+            vocab_size=4,
+            n_rows=4,
+            checkpoint="google/mt5-base",
+            tied=True,
+        )
 
 
 def test_an_empty_reference_set_cannot_be_constructed_at_all() -> None:

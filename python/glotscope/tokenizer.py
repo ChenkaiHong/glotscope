@@ -823,14 +823,20 @@ class Tokenizer:
                 or it is nothing.
         """
         tier0 = self.lint()
-        if embeddings.vocab_size != tier0.vocab_size:
+        # The invariant is that row i exists for every token id, not that the
+        # matrix stops where the vocabulary does. Comparing against the config's
+        # declared `vocab_size` instead refused every checkpoint padded above its
+        # tokenizer — Qwen3 reports 151669 against 151936 — which is precisely
+        # the gap §7.9's reference chain reads at link 2. Those extra rows are
+        # the padding rows, so refusing them disabled the fallback they feed.
+        if embeddings.n_rows < tier0.vocab_size:
             raise UnsupportedCheckpointError(
                 embeddings.checkpoint,
-                f"the embeddings were read for a vocabulary of "
-                f"{embeddings.vocab_size} tokens and this tokenizer has "
-                f"{tier0.vocab_size}. Row i of E_in is token i or it is nothing, "
-                f"so ranking across the mismatch would report one model's rows "
-                f"under another model's token ids",
+                f"the embedding matrix has {embeddings.n_rows} rows and this "
+                f"tokenizer has {tier0.vocab_size} tokens, so some token id has "
+                f"no row. Row i of E_in is token i or it is nothing, and ranking "
+                f"across the shortfall would report one model's rows under "
+                f"another model's token ids",
             )
 
         vocab: Mapping[str, int] = self._backend.get_vocab(with_added_tokens=True)

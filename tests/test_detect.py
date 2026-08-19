@@ -48,6 +48,74 @@ def test_cosine_distance_is_zero_along_the_reference_direction() -> None:
     assert distances[2] == pytest.approx(1.0, abs=1e-12)
 
 
+def test_a_zero_reference_mean_is_refused_on_a_tied_checkpoint() -> None:
+    # Chain link 2 is padding rows and padding rows are usually exactly zero, so
+    # u_ref = 0 is the ordinary case rather than a contrived one. Every cosine is
+    # then exactly 1.0 and the ranking is token-id order — which looks like a
+    # result. A tied checkpoint has no second indicator, so this must refuse.
+    e_out = np.array([[1.0, 0.0], [0.5, 0.5], [0.0, 1.0], [0.0, 0.0], [0.0, 0.0]])
+
+    with pytest.raises(ValueError, match="zero vector"):
+        detect(
+            e_in=e_out,
+            e_out=e_out,
+            tied=True,
+            reference_ids=(3, 4),
+            excluded=frozenset(),
+            vocab_size=3,
+            top_pct=50.0,
+        )
+
+
+def test_a_zero_reference_mean_degrades_an_untied_checkpoint_to_l2() -> None:
+    # Untied has somewhere to fall back to, so this degrades rather than refuses
+    # — at LOW_CONFIDENCE, because one indicator run alone is exactly what D10
+    # says never to trust.
+    e_in = np.array([[3.0, 0.0], [2.0, 0.0], [1.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
+    e_out = np.array([[1.0, 0.0], [0.5, 0.5], [0.0, 1.0], [0.0, 0.0], [0.0, 0.0]])
+
+    result = detect(
+        e_in=e_in,
+        e_out=e_out,
+        tied=False,
+        reference_ids=(3, 4),
+        excluded=frozenset(),
+        vocab_size=3,
+        top_pct=100.0,
+    )
+
+    assert result.indicator is Indicator.L2_E_IN
+    assert result.confidence is Confidence.LOW_CONFIDENCE
+    assert result.agreement is None
+    assert any("zero vector" in warning for warning in result.warnings)
+    # Ascending L2, so the smallest row leads — not token-id order.
+    assert [token_id for token_id, _ in result.ranked] == [2, 1, 0]
+
+
+def test_an_undefined_agreement_is_low_confidence_and_not_a_nan() -> None:
+    # Every candidate row of E_in shares a norm, so the L2 indicator is constant
+    # and `corrcoef` divides by a zero standard deviation. `nan < threshold` is
+    # False, so without an explicit check this published HIGH — and the nan then
+    # killed `canonical_json`, which sets allow_nan=False, after every number had
+    # already been computed.
+    e_in = np.array([[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, 0.0]])
+    e_out = np.array([[1.0, 0.0], [0.6, 0.8], [0.0, 1.0], [1.0, 0.0]])
+
+    result = detect(
+        e_in=e_in,
+        e_out=e_out,
+        tied=False,
+        reference_ids=(3,),
+        excluded=frozenset(),
+        vocab_size=3,
+        top_pct=100.0,
+    )
+
+    assert result.agreement is None
+    assert result.confidence is Confidence.LOW_CONFIDENCE
+    assert any("undefined" in warning for warning in result.warnings)
+
+
 def test_a_tied_checkpoint_runs_the_cosine_indicator_alone() -> None:
     # Arrange — rows 0 and 1 point at the reference row 3; row 2 does not.
     e_out = np.array([[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [1.0, 0.0]])
