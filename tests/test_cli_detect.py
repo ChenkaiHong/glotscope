@@ -63,6 +63,28 @@ def test_detect_writes_a_document_spanning_tier_zero_and_tier_two(
     assert "tier1" not in document
 
 
+def test_stderr_carries_every_warning_the_document_does(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The warnings that decide how a Tier 2 number should be read — which link of
+    # the t_ref chain supplied the reference set, and LOW_CONFIDENCE when the two
+    # indicators disagree — come from the tier report, not from the tokenizer.
+    # Echoing only the tokenizer's would leave stderr silent on a degraded run,
+    # and silence reads as "nothing to report".
+    tokenizer = tmp_path / "tokenizer.json"
+    rows = _tokenizer(tokenizer, byte_values=range(256))
+    weights = _weights(tmp_path / "model.safetensors", rows)
+
+    code = main(["detect", str(tokenizer), "--weights", str(weights), "--top-pct", "5.0"])
+
+    assert code == 0
+    captured = capsys.readouterr()
+    published = json.loads(captured.out)["warnings"]
+    assert published, "this fixture is expected to emit at least one warning"
+    emitted = [line.removeprefix("warning: ") for line in captured.err.splitlines()]
+    assert emitted == published
+
+
 def test_the_weights_block_records_what_was_read(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

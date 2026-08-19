@@ -98,22 +98,38 @@ class GoldSegmentations:
     is no gold answer to score against, and taking the first seen would make the
     result depend on row order rather than on the data."""
 
+    n_usable_rows: int
+    """Rows that survived every filter, counted **as rows**.
+
+    Not the same as :attr:`n_usable`, and the difference is why this field
+    exists. A form is scored once however many rows carry it, so ``n_usable``
+    counts types while every drop counter above counts rows. Dividing one by the
+    other would report a file whose usable rows repeat a form as mostly
+    unusable — a claim about coverage the data does not make."""
+
     @property
     def n_usable(self) -> int:
+        """Distinct forms available to score — the gold set's size."""
         return len(self.segmentations)
 
     @property
     def coverage(self) -> float:
-        """Usable share of the rows read. 0.0 over no rows."""
+        """Usable share of the rows read, on a row basis. 0.0 over no rows."""
         if self.n_rows == 0:
             return 0.0
-        return self.n_usable / self.n_rows
+        return self.n_usable_rows / self.n_rows
 
     def warning(self) -> str:
-        """The §9 warnings entry naming what was dropped and why."""
+        """The §9 warnings entry naming what was dropped and why.
+
+        Both counts appear because they answer different questions: the row share
+        says how much of the file survived, and the type count is the actual
+        denominator of the alignment scores it accompanies.
+        """
         return (
-            f"{self.language}: {self.n_usable} of {self.n_rows} MorphyNet rows are "
-            f"usable as character offsets ({self.coverage:.2%}). "
+            f"{self.language}: {self.n_usable_rows} of {self.n_rows} MorphyNet rows are "
+            f"usable as character offsets ({self.coverage:.2%}), giving "
+            f"{self.n_usable} distinct forms to score. "
             f"{self.n_unsegmented} carry the '-' sentinel, {self.n_surface_mismatch} "
             f"give a canonical segmentation that does not spell the surface form, "
             f"{self.n_empty_morpheme} contain an empty morpheme, and "
@@ -145,6 +161,9 @@ def parse_morphynet(lines: Iterable[str], *, language: str) -> GoldSegmentations
     n_surface_mismatch = 0
     n_empty_morpheme = 0
     candidates: dict[str, set[tuple[str, ...]]] = {}
+    rows_per_form: dict[str, int] = {}
+    """How many rows carried each form, so the row share can be reported without
+    conflating it with the number of forms actually scored."""
 
     for line in lines:
         row = line.rstrip("\n")
@@ -167,11 +186,13 @@ def parse_morphynet(lines: Iterable[str], *, language: str) -> GoldSegmentations
             n_surface_mismatch += 1
             continue
         candidates.setdefault(form, set()).add(morphemes)
+        rows_per_form[form] = rows_per_form.get(form, 0) + 1
 
     segmentations = {
         form: next(iter(readings)) for form, readings in candidates.items() if len(readings) == 1
     }
     n_ambiguous = len(candidates) - len(segmentations)
+    n_usable_rows = sum(rows_per_form[form] for form in segmentations)
 
     if not segmentations:
         raise CorpusIntegrityError(
@@ -191,6 +212,7 @@ def parse_morphynet(lines: Iterable[str], *, language: str) -> GoldSegmentations
         n_surface_mismatch=n_surface_mismatch,
         n_empty_morpheme=n_empty_morpheme,
         n_ambiguous=n_ambiguous,
+        n_usable_rows=n_usable_rows,
     )
 
 

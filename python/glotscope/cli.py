@@ -363,8 +363,27 @@ def _emit(document: str, out: str | None) -> None:
     Path(out).write_text(document, encoding="utf-8")
 
 
+def _echo_warnings(document: Mapping[str, Any]) -> None:
+    """Echo a document's own warnings array to stderr.
+
+    Warnings go to stderr so stdout stays a document a pipe can read. It is the
+    **assembled** array that gets echoed, never a subset: the entries that matter
+    most for a Tier 2 run — which link of the ``t_ref`` chain supplied the
+    reference set, and the ``LOW_CONFIDENCE`` verdict when the two indicators
+    disagree — are contributed by the tier reports, not by the tokenizer.
+    Printing only the tokenizer's is worse than printing none, because a reader
+    watching stderr for trouble reads silence as "nothing to report".
+    """
+    for warning in document.get("warnings", ()):
+        print(f"warning: {warning}", file=sys.stderr)
+
+
 def _lint(args: argparse.Namespace) -> int:
-    """Tier 0. Warnings go to stderr so stdout stays a document a pipe can read."""
+    """Tier 0. Warnings go to stderr so stdout stays a document a pipe can read.
+
+    Tier 0 has no tier-level warnings to aggregate — :meth:`Tier0Report.to_dict`
+    emits no ``warnings`` key — so this echoes the tokenizer's directly.
+    """
     tokenizer = _load_tokenizer(args.tokenizer, args.revision)
     report = tokenizer.lint()
     for warning in tokenizer.warnings:
@@ -472,7 +491,9 @@ def _analyze(args: argparse.Namespace) -> int:
         frequency_weighted=_tri_state(args.frequency_weighted),
         include_single_token_words=_tri_state(args.include_single_token_words),
     )
-    _emit(canonical_json(report.to_dict()) + "\n", args.out)
+    document = report.to_dict()
+    _echo_warnings(document)
+    _emit(canonical_json(document) + "\n", args.out)
     return 0
 
 
@@ -544,9 +565,9 @@ def _detect(args: argparse.Namespace) -> int:
         ),
         warnings=tokenizer.warnings,
     )
-    for warning in tokenizer.warnings:
-        print(f"warning: {warning}", file=sys.stderr)
-    _emit(canonical_json(report.to_dict()) + "\n", args.out)
+    document = report.to_dict()
+    _echo_warnings(document)
+    _emit(canonical_json(document) + "\n", args.out)
     return 0
 
 

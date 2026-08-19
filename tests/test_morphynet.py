@@ -84,6 +84,31 @@ def test_repeated_identical_rows_collapse_to_one_type() -> None:
     assert dict(gold.segmentations) == {"microtomes": ("microtome", "s")}
     assert gold.n_rows == 2
     assert gold.n_ambiguous == 0
+    # Types and rows are counted separately on purpose. Both rows were usable, so
+    # coverage is 1.0 — dividing the one *form* by the two *rows* would report
+    # half the file as unusable when nothing was dropped, and that number goes
+    # into the §9 warnings array where a reader takes it at face value.
+    assert gold.n_usable == 1
+    assert gold.n_usable_rows == 2
+    assert gold.coverage == pytest.approx(1.0)
+
+
+def test_an_ambiguous_form_takes_all_of_its_rows_out_of_the_row_count() -> None:
+    # Two readings of `unlocks` across two rows, plus one usable row. The
+    # ambiguous form is dropped whole, so neither of its rows may count as usable
+    # — otherwise coverage would credit rows nothing was scored from.
+    gold = parse_morphynet(
+        [
+            "unlock\tunlocks\tV|PRS;3;SG\tun|lock|s",
+            "unlock\tunlocks\tN|PL\tunlock|s",
+            "cat\tcats\tN|PL\tcat|s",
+        ],
+        language="eng",
+    )
+
+    assert gold.n_rows == 3
+    assert gold.n_usable_rows == 1
+    assert gold.coverage == pytest.approx(1 / 3)
 
 
 def test_a_form_with_two_different_segmentations_is_dropped_rather_than_guessed() -> None:
@@ -181,6 +206,7 @@ def test_coverage_over_no_rows_is_zero_rather_than_a_division() -> None:
         n_surface_mismatch=0,
         n_empty_morpheme=0,
         n_ambiguous=0,
+        n_usable_rows=0,
     )
 
     assert empty.coverage == 0.0
