@@ -12,11 +12,13 @@ installable.
 
 > **Status: v0.1.0 prepared, not yet published.** Tiers 0, 1 and 2 are implemented and tested, and
 > `glotscope lint`, `analyze`, `detect`, `compare` and `verify` run. `leaderboard` is scheduled and
-> exits 2 rather than guessing. Tier 2's indicators are not yet validated against the published
-> candidate sets. Morphology now runs end to end against MorphyNet, over the quarter of that
-> corpus whose gold segmentation spells its own surface form — the coverage, and what it costs,
-> are recorded in [`divergences.md`](docs/divergences.md). The only release on PyPI is the 0.0.0
-> name reservation.
+> exits 2 rather than guessing. Tier 2's indicators now reproduce the published under-training
+> ranking exactly — Spearman ρ = 1.000000 against the reference implementation on all three of its
+> models — and the candidate sets differ by one to five tokens, each attributed to a named selection
+> rule rather than tuned away. Morphology runs end to end against MorphyNet, over the quarter of
+> that corpus whose gold segmentation spells its own surface form. Both the coverage and the
+> candidate-set decomposition are recorded in [`divergences.md`](docs/divergences.md). The only
+> release on PyPI is the 0.0.0 name reservation.
 > See the [`build order and open questions`](docs/build-order.md).
 
 ## What these metrics do and do not tell you

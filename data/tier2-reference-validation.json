@@ -1,0 +1,234 @@
+{
+  "indicator_index": 0,
+  "models": [
+    {
+      "candidate_delta": {
+        "domain_difference": 0,
+        "observed": 1,
+        "ok_special_admitted": 0,
+        "threshold_rule_extra": 1
+      },
+      "candidates": {
+        "containment_of_ours_in_theirs": 1.0,
+        "glotscope": 998,
+        "intersection": 998,
+        "jaccard": 0.998999,
+        "ours_only": [],
+        "reference": 999,
+        "theirs_only": [
+          {
+            "category": "OK",
+            "decoded": "Before",
+            "token_id": 8421
+          }
+        ]
+      },
+      "checkpoint": "openai-community/gpt2-medium",
+      "glotscope": {
+        "confidence": "HIGH",
+        "dtype": "float32",
+        "indicator": "cosine_to_unused_mean",
+        "indicator_agreement": null,
+        "shard_sha256": "fc5a354a19255ad494f3d71549390baca1ccf61d1d822b9408971705c687c9cd",
+        "tied": true,
+        "vocab_size": 50257
+      },
+      "published_candidate_count": 999,
+      "rank_agreement": {
+        "shared_domain": 49912,
+        "spearman_rho": 1.0
+      },
+      "reference_file": "openai_community_gpt2_medium.jsonl.gz",
+      "reference_sha256": "f71b52586210aadd1ec6f13165b6b07b152d2f0d07a4643799cfb5ad0b3207c5",
+      "revision": "6dcaa7a952f72f9298047fd5137cd6e4f05f41da",
+      "stage1_exclusion": {
+        "glotscope": 345,
+        "ours_only": [],
+        "partial_utf8": 331,
+        "reference_non_ok": 345,
+        "special": 1,
+        "theirs_only": [],
+        "unreachable": 344
+      },
+      "threshold": {
+        "reference_percentile_value": 0.383112,
+        "top_pct": 2.0
+      }
+    },
+    {
+      "candidate_delta": {
+        "domain_difference": 0,
+        "observed": 3,
+        "ok_special_admitted": 2,
+        "threshold_rule_extra": 1
+      },
+      "candidates": {
+        "containment_of_ours_in_theirs": 0.999804,
+        "glotscope": 5114,
+        "intersection": 5113,
+        "jaccard": 0.999023,
+        "ours_only": [
+          {
+            "category": "OK",
+            "decoded": "ↄ",
+            "token_id": 255285
+          }
+        ],
+        "reference": 5117,
+        "theirs_only": [
+          {
+            "category": "OK_SPECIAL",
+            "decoded": "<pad>",
+            "token_id": 0
+          },
+          {
+            "category": "OK_SPECIAL",
+            "decoded": "<unk>",
+            "token_id": 3
+          },
+          {
+            "category": "OK",
+            "decoded": "<start_of_turn>",
+            "token_id": 106
+          },
+          {
+            "category": "OK",
+            "decoded": "<end_of_turn>",
+            "token_id": 107
+          }
+        ]
+      },
+      "checkpoint": "google/gemma-2b",
+      "glotscope": {
+        "confidence": "HIGH",
+        "dtype": "bfloat16",
+        "indicator": "cosine_to_unused_mean",
+        "indicator_agreement": null,
+        "shard_sha256": "98caad07f1e1d17fede7734906d6881d4cb231e1d0cd2ebcf7fc8a6317eee4d6",
+        "tied": true,
+        "vocab_size": 256000
+      },
+      "published_candidate_count": 5117,
+      "rank_agreement": {
+        "shared_domain": 255738,
+        "spearman_rho": 1.0
+      },
+      "reference_file": "google_gemma_2b.jsonl.gz",
+      "reference_sha256": "80829dc4b7a3516a071dd25b171249a48e3c509357d4062a88408b2d3a34dfcd",
+      "revision": "9cf48e52b224239de00d483ec8eb84fb8d0f3a3a",
+      "stage1_exclusion": {
+        "glotscope": 262,
+        "ours_only": [
+          {
+            "category": "OK",
+            "decoded": "<start_of_turn>",
+            "token_id": 106
+          },
+          {
+            "category": "OK",
+            "decoded": "<end_of_turn>",
+            "token_id": 107
+          }
+        ],
+        "partial_utf8": 115,
+        "reference_non_ok": 261,
+        "special": 6,
+        "theirs_only": [
+          {
+            "category": "OK_SPECIAL",
+            "decoded": "<mask>",
+            "token_id": 4
+          }
+        ],
+        "unreachable": 256
+      },
+      "threshold": {
+        "reference_percentile_value": 0.020936,
+        "top_pct": 2.0
+      }
+    },
+    {
+      "candidate_delta": {
+        "domain_difference": 0,
+        "observed": 5,
+        "ok_special_admitted": 4,
+        "threshold_rule_extra": 1
+      },
+      "candidates": {
+        "containment_of_ours_in_theirs": 1.0,
+        "glotscope": 1275,
+        "intersection": 1275,
+        "jaccard": 0.996094,
+        "ours_only": [],
+        "reference": 1280,
+        "theirs_only": [
+          {
+            "category": "OK_SPECIAL",
+            "decoded": "<|pad|>",
+            "token_id": 0
+          },
+          {
+            "category": "OK_SPECIAL",
+            "decoded": "<|startoftext|>",
+            "token_id": 1
+          },
+          {
+            "category": "OK_SPECIAL",
+            "decoded": "<|endoftext|>",
+            "token_id": 2
+          },
+          {
+            "category": "OK_SPECIAL",
+            "decoded": "<|unk|>",
+            "token_id": 3
+          },
+          {
+            "category": "OK",
+            "decoded": "ck",
+            "token_id": 2220
+          }
+        ]
+      },
+      "checkpoint": "ai21labs/Jamba-v0.1",
+      "glotscope": {
+        "confidence": "LOW_CONFIDENCE",
+        "dtype": "bfloat16",
+        "indicator": "l2_e_in",
+        "indicator_agreement": 0.074424,
+        "shard_sha256": "fdc2c310b3fde5e2dffddb501bd39eea9c550f7cea19884a5dbb653e2d5f65e4",
+        "tied": false,
+        "vocab_size": 65536
+      },
+      "published_candidate_count": 1280,
+      "rank_agreement": {
+        "shared_domain": 63765,
+        "spearman_rho": 1.0
+      },
+      "reference_file": "ai21labs_Jamba_v0_1.jsonl.gz",
+      "reference_sha256": "edc12e51e4ffd0ff7f186f053323cca802c7dd566a12422b85b6b687e96cbbdb",
+      "revision": "9efd11575ba791d9e3d25d4c8b670e78506b2df7",
+      "stage1_exclusion": {
+        "glotscope": 1771,
+        "ours_only": [],
+        "partial_utf8": 115,
+        "reference_non_ok": 1771,
+        "special": 4,
+        "theirs_only": [],
+        "unreachable": 1767
+      },
+      "threshold": {
+        "reference_percentile_value": 0.431387,
+        "top_pct": 2.0
+      }
+    }
+  ],
+  "reference_implementation": {
+    "name": "magikarp",
+    "results_url": "https://raw.githubusercontent.com/cohere-ai/magikarp/764e8cd02e598deb65692184a03f843ce3543ded/results/verifications",
+    "revision": "764e8cd02e598deb65692184a03f843ce3543ded",
+    "url": "https://github.com/cohere-ai/magikarp"
+  },
+  "rounding_digits": 6,
+  "schema_version": 1,
+  "top_pct": 2.0
+}

@@ -123,6 +123,60 @@ Two consequences worth stating rather than discovering:
 - Comparing results requires them to have been published first, which is the shape the leaderboard
   wants anyway: `results/` holds documents, and the nightly re-run compares documents to documents.
 
+## Tier 2 candidate sets are smaller than the published ones by two selection rules
+
+**Status:** the *ranking* is a reproduction gate and is committed as one; the *count* is not, and the
+shortfall is decomposed rather than tuned away.
+
+D18 validates §7.9 against Land & Bartolo's **candidate sets** — 999 / 5117 / 1280 — rather than their
+confirmed counts of 3161 / 49 / 6, which come from a verification prompt run through the model and are
+therefore Tier 3. `scripts/validate_tier2_reference.py` regenerates the comparison and
+[`data/tier2-reference-validation.json`](../data/tier2-reference-validation.json) is its committed
+output; every checkpoint is pinned by Hub revision and every reference file by SHA-256.
+
+The rankings are identical. Spearman ρ between the two implementations' indicator values is
+**1.000000** on all three models, over 49,912 / 255,738 / 63,765 tokens respectively — which is the
+claim that matters, because a count can agree by coincidence and an ordering over a quarter of a
+million tokens cannot. That clears M2's ρ > 0.9 gate with no margin left to spend.
+
+The counts differ by one, three and five tokens, and every one of them is a selection rule rather than
+a measurement:
+
+| Model | glotscope | published | `OK_SPECIAL` admitted | threshold rule | unexplained |
+|---|---|---|---|---|---|
+| `openai-community/gpt2-medium` | 998 | 999 | 0 | +1 | **0** |
+| `google/gemma-2b` | 5,114 | 5,117 | +2 | +1 | **0** |
+| `ai21labs/Jamba-v0.1` | 1,275 | 1,280 | +4 | +1 | **0** |
+
+**Special ids.** magikarp draws its threshold over tokens whose category is exactly `OK`, then selects
+with `category.startswith("OK")` — so `OK_SPECIAL` ids enter the candidate set they were excluded from
+defining. §7.9 Stage 1 excludes special ids outright, so glotscope never scores them. Jamba's four are
+`<|pad|>`, `<|startoftext|>`, `<|endoftext|>` and `<|unk|>`; gemma's two are `<pad>` and `<unk>`. Their
+embedding rows being untrained is a statement about the checkpoint's padding, not about its vocabulary.
+
+**Threshold rule.** §7.9 specifies the top `top_pct` share, which is `floor(N × 2%)`. magikarp takes
+`np.percentile(..., 2.0)` — linearly interpolated — and admits ties with `<=`. The interpolated
+threshold lands on or just above the k-th value, so it admits exactly one more token in each of the
+three. For gpt2-medium that token is id 8421, ` Before`; for Jamba it is id 2220, `ck`.
+
+The last column is what makes this a decomposition rather than an excuse: applying §7.9's own rule to
+the reference implementation's published indicator values reproduces glotscope's count **exactly**, on
+all three. Nothing is left for the indicator, the reference set, or an unnamed cause to absorb, and
+`tests/test_tier2_reference_validation.py` asserts that residue stays zero.
+
+Set membership follows: containment of glotscope's candidates in magikarp's is 1.000 / 0.9998 / 1.000.
+The single gemma exception is id 255285, `ↄ`, which sits either side of the two rules' cut.
+
+**Stage 1 also disagrees on gemma, by three ids out of 256,000.** glotscope excludes 262 where magikarp
+excludes 261. glotscope drops ids 106 and 107 — `<start_of_turn>` and `<end_of_turn>`, which the
+tokenizer declares as added special tokens — where magikarp categorises both `OK`; magikarp drops id 4,
+`<mask>`, as `OK_SPECIAL` where glotscope does not. gpt2-medium and Jamba agree exactly (345 and 1,771).
+
+**Not adopted.** A magikarp-compatible selection mode was considered and declined. §7.9 is normative
+and its Stage 1 excludes special ids by design; reproducing the upstream asymmetry would mean
+publishing under a rule whose own threshold and selection predicates disagree. The differences are
+named here instead, which is what this file is for.
+
 ## Zouhar Rényi README values
 
 **Status:** upstream example discrepancy; the documented numbers are not an α=2.5 reproduction gate.

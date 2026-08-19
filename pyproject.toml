@@ -111,6 +111,7 @@ include = [
 exclude = ["glotscope-PRD.md", "HISTORY.md"]
 
 [tool.hatch.build.targets.sdist.force-include]
+"data/tier2-reference-validation.json" = "data/tier2-reference-validation.json"
 "data/ud-license-audit.json" = "data/ud-license-audit.json"
 
 # ---------------------------------------------------------------------------
