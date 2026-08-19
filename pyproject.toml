@@ -102,6 +102,7 @@ packages = ["python/glotscope"]
 include = [
     "python/glotscope/**",
     "tests/**",
+    "scripts/**",
     "docs/build-order.md",
     "docs/divergences.md",
     "docs/m0-source-audit.md",
