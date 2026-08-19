@@ -362,9 +362,25 @@ class Embeddings:
             _float_dtype(tensors[e_out_name]["dtype"], checkpoint)
 
         e_in = _as_array(tensors[e_in_name])
+        e_out = None if e_out_name is None else _as_array(tensors[e_out_name])
+        if e_out is not None and e_out.shape[0] < e_in.shape[0]:
+            # `n_rows` is read off `E_in`, and every index Tier 2 computes comes
+            # from that geometry — candidate rows below |V|, and reference rows
+            # in the padding above it. A shorter `E_out` sends those indices off
+            # the end, and the IndexError surfaces from inside `detect`, far from
+            # the checkpoint that caused it. An untied model whose `embed_tokens`
+            # is padded to a multiple of 128 while its `lm_head` is not has
+            # exactly this shape, so the refusal belongs here with the dtype one.
+            raise UnsupportedCheckpointError(
+                checkpoint,
+                f"E_out has {e_out.shape[0]} rows and E_in has {e_in.shape[0]}, "
+                f"so the two matrices disagree about how many tokens exist. Row i "
+                f"is token i in both or the pair means nothing, and the reference "
+                f"set is drawn from exactly the rows E_out is missing",
+            )
         return cls(
             e_in=e_in,
-            e_out=None if e_out_name is None else _as_array(tensors[e_out_name]),
+            e_out=e_out,
             # Tying is read off the shards rather than off a config flag:
             # `tie_word_embeddings` is absent from gemma-2b's config entirely,
             # and the absence of a separate head is the fact that decides which

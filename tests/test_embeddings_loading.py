@@ -63,6 +63,26 @@ def test_a_separate_lm_head_is_read_as_untied(tmp_path: Path) -> None:
     np.testing.assert_array_equal(embeddings.e_out, e_out)
 
 
+def test_an_lm_head_shorter_than_the_embedding_matrix_is_refused(tmp_path: Path) -> None:
+    # A real shape: `embed_tokens` padded to a hardware multiple, `lm_head` left
+    # at the true vocabulary size. `n_rows` is read off E_in, and every index
+    # Tier 2 computes follows that geometry — including the reference rows drawn
+    # from the padding, which is precisely the region E_out does not have. Left
+    # unchecked this raised `IndexError: index 5 is out of bounds for axis 0 with
+    # size 5` from inside `detect`, two modules away from the checkpoint.
+    # Arrange
+    e_in = np.arange(18, dtype=np.float32).reshape(6, 3)
+    e_out = np.arange(12, dtype=np.float32).reshape(4, 3)
+    path = write_safetensors(
+        tmp_path / "model.safetensors",
+        {"model.embed_tokens.weight": f32(e_in), "lm_head.weight": f32(e_out)},
+    )
+
+    # Act / Assert
+    with pytest.raises(UnsupportedCheckpointError, match="disagree about how many tokens"):
+        Embeddings.from_file(path, vocab_size=4)
+
+
 def test_the_gpt2_embedding_name_resolves(tmp_path: Path) -> None:
     # Arrange — gpt2-medium calls it wte.weight, not model.embed_tokens.weight.
     rows = np.arange(6, dtype=np.float32).reshape(2, 3)
