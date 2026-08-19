@@ -139,6 +139,16 @@ ignore = [
     "E501",  # line length is enforced by the formatter
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# MorphyNet's segmentation column is quoted verbatim in both files, and the
+# Mongolian rows are the load-bearing example: the gold omits a buffer consonant
+# the surface form carries. Cyrillic a/e/p read as confusable with Latin, which
+# is exactly the check RUF001/RUF002 exist for elsewhere -- here the confusable
+# character *is* the datum, and substituting a Latin lookalike would falsify it.
+"python/glotscope/morphynet.py" = ["RUF001", "RUF002"]
+"tests/test_morphynet.py" = ["RUF001", "RUF002"]
+"tests/test_morphology_wiring.py" = ["RUF001", "RUF002"]
+
 [tool.mypy]
 python_version = "3.10"
 strict = true

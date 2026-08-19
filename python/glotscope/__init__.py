@@ -57,6 +57,8 @@ from glotscope.errors import (
     UnsupportedCheckpointError,
 )
 from glotscope.manifest import Manifest, environment
+from glotscope.morphology import AlignedWord, morphology
+from glotscope.morphynet import GoldSegmentations, parse_morphynet
 from glotscope.report import Report, Tier0Report, Tier1Report, Tier2Report, TokenCandidate
 from glotscope.results import (
     CompressionResult,
@@ -71,6 +73,7 @@ from glotscope.tokenizer import Tokenizer
 
 __all__ = [
     "Algorithm",
+    "AlignedWord",
     "Backend",
     "BoundaryCounts",
     "Capability",
@@ -84,6 +87,7 @@ __all__ = [
     "FertilityResult",
     "GiniResult",
     "GlotscopeError",
+    "GoldSegmentations",
     "IncomparableError",
     "Indicator",
     "LoadedCorpus",
@@ -117,6 +121,8 @@ __all__ = [
     "compare",
     "environment",
     "load_result",
+    "morphology",
+    "parse_morphynet",
 ]
 
 try:

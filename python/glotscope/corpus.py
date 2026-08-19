@@ -220,9 +220,20 @@ REGISTRY: dict[str, CorpusSpec] = {
         capabilities=frozenset({Capability.MORPH_GOLD}),
         license="CC-BY-SA",
         is_commercial_ok=True,
-        note="15 languages. Required for the full-alignment measure in §7.7(c).",
-        recipe="Derivational and inflectional TSVs from the MorphyNet GitHub "
-        "repository, pinned by commit.",
+        note="15 languages, of which 12 publish an inflectional file — hbs, pol "
+        "and rus ship derivational only, and Turkish is absent from MorphyNet "
+        "altogether although §10.2 keeps it as the canonical MorphScore test bed. "
+        "Required for the full-alignment measure in §7.7(c). Expect to lose most "
+        "of a file: the segmentation column is canonical rather than surface, and "
+        "only rows whose morphemes spell their own inflected form can be scored "
+        "as character offsets (24.20% of English, 30.41% of Mongolian).",
+        recipe="The *inflectional* TSV for each language from the MorphyNet "
+        "GitHub repository, pinned by commit — the derivational file names one "
+        "affix per source/target pair rather than a segmentation and is refused. "
+        "Upstream names are irregular (por/pt.inflectional.v1.tsv, "
+        "hun/hu.inflectional.segmentation.v1.tsv, spa split across two parts), so "
+        "copy each to <root>/morphynet/<commit>/train/<lang>.txt, concatenating "
+        "the parts where upstream split them.",
     ),
     "strr_wordlists": CorpusSpec(
         id="strr_wordlists",

@@ -24,10 +24,12 @@ from glotscope.detect import Detection, detect
 from glotscope.enums import (
     Algorithm,
     Capability,
+    MorphologicalType,
     Normalization,
     Segmenter,
     TokenClass,
     TokenizerFamily,
+    TypologicalScope,
 )
 from glotscope.errors import (
     NoReferenceSetError,
@@ -37,9 +39,17 @@ from glotscope.errors import (
 from glotscope.fertility import fertility
 from glotscope.lint import detect_algorithm, lint_backend, token_bytes
 from glotscope.manifest import UNKNOWN_LICENSE, ParameterManifest, TokenizerManifest
+from glotscope.morphology import AlignedWord, morphology, pieces_from_offsets
+from glotscope.morphynet import GoldSegmentations, parse_morphynet
 from glotscope.reference_set import resolve_reference_set
 from glotscope.report import Tier0Report, Tier1Report, Tier2Report, TokenCandidate
-from glotscope.results import CorpusMetrics, FertilityResult, LanguageMetrics, StrrPair
+from glotscope.results import (
+    CorpusMetrics,
+    FertilityResult,
+    LanguageMetrics,
+    MorphologyResult,
+    StrrPair,
+)
 from glotscope.roundtrip import roundtrip_matches_from_ids
 from glotscope.segmenters import get_segmenter
 from glotscope.strr import strr
@@ -170,6 +180,70 @@ def _check_segmenter_capability(segmenter: Segmenter | None, corpus: Corpus) -> 
     """
     if segmenter is not None and segmenter.requires_gold_segmentation:
         corpus.require(Capability.WORD_SEGMENTATION, "fertility")
+
+
+def _check_morphology_parameters(
+    corpus: Corpus,
+    *,
+    morphological_types: Mapping[str, MorphologicalType] | None,
+    frequency_weighted: bool | None,
+    include_single_token_words: bool | None,
+) -> bool:
+    """Decide whether this is a morphology run, and refuse the half-states.
+
+    Two refusals, both of which would otherwise publish a manifest that does not
+    describe the run. Passing these against a corpus with no gold records
+    parameters for a measurement nobody made; passing only some of them against a
+    corpus that has gold means §7.7 rule 4's "no default" would be satisfied by a
+    default chosen here.
+
+    Returns:
+        Whether the corpus declares gold morphology and the parameters are
+        complete, i.e. whether the gold path runs.
+
+    Raises:
+        ValueError: naming the parameters that are missing, or the languages with
+            no declared type, or the capability the corpus does not declare.
+    """
+    supplied = {
+        "morphological_types": morphological_types,
+        "frequency_weighted": frequency_weighted,
+        "include_single_token_words": include_single_token_words,
+    }
+    if not corpus.has(Capability.MORPH_GOLD):
+        named = sorted(name for name, value in supplied.items() if value is not None)
+        if named:
+            raise ValueError(
+                f"corpus {corpus.spec.id!r} declares no {Capability.MORPH_GOLD.value}, "
+                f"so {', '.join(named)} would be recorded for a measurement that "
+                f"never ran (§9). Morphological alignment is scored against a gold "
+                f"corpus — analyze one, and gating is on capability rather than on "
+                f"corpus identity (D5)."
+            )
+        return False
+
+    missing = sorted(name for name, value in supplied.items() if value is None)
+    if missing:
+        raise ValueError(
+            f"corpus {corpus.spec.id!r} declares {Capability.MORPH_GOLD.value}, so "
+            f"morphological alignment is scored and {', '.join(missing)} must be "
+            f"given. §7.7 rule 4 makes frequency weighting and one-token-word "
+            f"inclusion recorded parameters with no default: they change tokenizer "
+            f"rankings and the v2 paper explicitly could not choose one, so a "
+            f"default here would publish a ranking under a convention nobody stated."
+        )
+
+    types = morphological_types or {}
+    undeclared = [language for language in corpus.languages if language not in types]
+    if undeclared:
+        raise ValueError(
+            f"no morphological type declared for {', '.join(undeclared)}. Scope is "
+            f"what §7.7 rule 2 decides from it — Semitic root-and-pattern morphology "
+            f"has no linear boundary to score and isolating languages lack "
+            f"affixation — and guessing it would publish a number where the API "
+            f"exists to return OUT_OF_SCOPE."
+        )
+    return True
 
 
 def _unk_token_id(backend: BackendTokenizer, spec: Mapping[str, Any]) -> int | None:
@@ -403,6 +477,9 @@ class Tokenizer:
         add_special_tokens: bool = False,
         segmenter: Segmenter | None = None,
         segmenter_model_version: str | None = None,
+        morphological_types: Mapping[str, MorphologicalType] | None = None,
+        frequency_weighted: bool | None = None,
+        include_single_token_words: bool | None = None,
     ) -> Tier1Report:
         """Tier 1: corpus-based metrics (PRD §7.1-§7.7, §8.1).
 
@@ -420,10 +497,16 @@ class Tokenizer:
         the compression family are segmenter-free, and §14.3 step 1 runs parity
         over all 229 FLORES+ varieties precisely because it costs nothing.
         Word-level metrics then raise :class:`SegmenterRequiredError` on access
-        rather than silently picking a convention (D6). Passing a segmenter
-        currently raises :class:`NotImplementedError`, because the adapters ship
-        as optional extras that do not exist yet and recording a segmenter that
-        never ran would put a false claim in the manifest.
+        rather than silently picking a convention (D6).
+
+        A corpus declaring :attr:`~glotscope.enums.Capability.MORPH_GOLD` turns
+        this into a **morphology run**: its rows are parsed as MorphyNet
+        inflectional gold, the surface forms become the documents every other
+        metric sees, and §7.7's three measures are scored per language. That is
+        why the gold arrives as a corpus rather than as a second argument — §9
+        carries one corpus block, and it has to pin the bytes the published
+        morphology number came from. CPT and round-trip in such a run therefore
+        describe a word list, which is what was measured.
 
         ``leading_space`` defaults to ``True`` for byte-level BPE per §7.1 rule 5,
         and is recorded either way. It can move STRR by tens of points.
@@ -438,6 +521,16 @@ class Tokenizer:
             corpus: a :class:`~glotscope.corpus.LoadedCorpus`. A bare
                 :class:`~glotscope.corpus.Corpus` is refused: glotscope ships no
                 corpora (D12), so an unloaded one carries no text.
+            morphological_types: the type of each language in the set, which
+                decides typological scope (§7.7 rule 2). Required — and only
+                accepted — when the corpus declares gold morphology.
+            frequency_weighted: whether the gold is a stream of occurrences
+                rather than a list of types. Recorded, not applied.
+            include_single_token_words: whether words the tokenizer emitted whole
+                are scored. Both of these are recorded parameters with **no
+                default** (§7.7 rule 4): they change tokenizer rankings and the
+                v2 paper explicitly could not choose one, so a default here would
+                publish a ranking under a convention nobody stated.
 
         Raises:
             CapabilityError: if ``segmenter`` is
@@ -445,13 +538,24 @@ class Tokenizer:
                 declare gold word segmentation. Applying "UD segmentation" to
                 arbitrary text requires a trained model with its own per-language
                 accuracy and its own version, which is a different operation.
-            NotImplementedError: if any segmenter is requested.
+            CorpusIntegrityError: if a gold corpus does not parse as MorphyNet
+                inflectional rows, or yields no usable segmentation.
             ValueError: if the corpus was never loaded, resolved to no languages,
-                or holds no documents for a language it names.
+                or holds no documents for a language it names; if a gold corpus
+                is analyzed without all three morphology parameters or without a
+                type for one of its languages; or if any of those parameters is
+                passed against a corpus that declares no gold morphology, which
+                would record a measurement nobody made.
         """
         normalization = Normalization(normalization)
         loaded = _require_loaded(corpus)
         _check_segmenter_capability(segmenter, loaded.corpus)
+        morphology_requested = _check_morphology_parameters(
+            loaded.corpus,
+            morphological_types=morphological_types,
+            frequency_weighted=frequency_weighted,
+            include_single_token_words=include_single_token_words,
+        )
         if not loaded.lines:
             raise ValueError(
                 f"corpus {loaded.corpus.spec.id!r} resolved to no languages, so "
@@ -471,6 +575,19 @@ class Tokenizer:
                     f"corpus {loaded.corpus.spec.id!r} holds no documents for "
                     f"{language!r}, and every Tier 1 ratio divides by a corpus total"
                 )
+            gold: GoldSegmentations | None = None
+            if morphology_requested:
+                # Parsed from the *normalized* rows so that the gold morphemes and
+                # the form they are scored against are in one Unicode form. A form
+                # normalized on its way to the tokenizer and gold that was not
+                # would stop spelling the same string, and AlignedWord would refuse
+                # every word in the corpus.
+                gold = parse_morphynet(
+                    (_normalized(row, normalization) for row in documents),
+                    language=language,
+                )
+                warnings.append(gold.warning())
+                documents = tuple(gold.segmentations)
             chunks: list[DocumentStats] = []
             byte_lengths: list[int] = []
             is_blank: list[bool] = []
@@ -533,6 +650,17 @@ class Tokenizer:
                 ),
                 fertility=words,
                 strr=self._strr(loaded.corpus, language, documents, normalization),
+                morphology=self._morphology(
+                    gold,
+                    # Checked by the gate above; repeated here because mypy reads
+                    # the parameters as optional and the alternative is silently
+                    # substituting a default §7.7 rule 4 forbids.
+                    morphological_types=morphological_types or {},
+                    frequency_weighted=bool(frequency_weighted),
+                    include_single_token_words=bool(include_single_token_words),
+                    leading_space=leading_space,
+                    warnings=warnings,
+                ),
                 roundtrip_rate=roundtrip_matches / stats.n_documents,
             )
 
@@ -587,6 +715,81 @@ class Tokenizer:
             # upstream file.
             lowercased=False,
         )
+
+    def _morphology(
+        self,
+        gold: GoldSegmentations | None,
+        *,
+        morphological_types: Mapping[str, MorphologicalType],
+        frequency_weighted: bool,
+        include_single_token_words: bool,
+        leading_space: bool,
+        warnings: list[str],
+    ) -> MorphologyResult | None:
+        """Score §7.7's three measures against a parsed gold segmentation.
+
+        ``None`` when the corpus carries no gold, which is every corpus but one:
+        morphological alignment is not a metric that can be computed from text.
+
+        An out-of-scope language never reaches the tokenizer. Scope is a property
+        of the language rather than of the batch, so encoding a corpus to be told
+        the measure does not apply to it would be work performed to produce
+        nothing.
+        """
+        if gold is None:
+            return None
+        morphological_type = morphological_types[gold.language]
+        words: list[AlignedWord] = []
+        if TypologicalScope.for_type(morphological_type) is TypologicalScope.IN_SCOPE:
+            words = self._aligned_words(gold, leading_space=leading_space, warnings=warnings)
+        return morphology(
+            words,
+            language=gold.language,
+            morphological_type=morphological_type,
+            frequency_weighted=frequency_weighted,
+            include_single_token_words=include_single_token_words,
+        )
+
+    def _aligned_words(
+        self,
+        gold: GoldSegmentations,
+        *,
+        leading_space: bool,
+        warnings: list[str],
+    ) -> list[AlignedWord]:
+        """Pair each gold segmentation with the tokenizer's, in character offsets.
+
+        Offsets rather than decoded tokens: see
+        :func:`~glotscope.morphology.pieces_from_offsets`. A word whose offsets do
+        not tile it is dropped and counted rather than scored, because the
+        alternative is boundaries measured against a string the tokenizer never
+        saw.
+        """
+        forms = list(gold.segmentations)
+        shift = 1 if leading_space else 0
+        words: list[AlignedWord] = []
+        unalignable = 0
+        for start in range(0, len(forms), _ANALYSIS_BATCH_SIZE):
+            batch = forms[start : start + _ANALYSIS_BATCH_SIZE]
+            encodings = self._backend.encode_batch(
+                [f" {form}" if leading_space else form for form in batch],
+                # Never on a word: a special token would carry offsets of its own
+                # and claim a boundary the tokenizer did not put in the word.
+                add_special_tokens=False,
+            )
+            for form, encoding in zip(batch, encodings, strict=True):
+                pieces = pieces_from_offsets(form, encoding.offsets, shift=shift)
+                if pieces is None:
+                    unalignable += 1
+                    continue
+                words.append(AlignedWord(morphemes=gold.segmentations[form], tokens=pieces))
+        if unalignable:
+            warnings.append(
+                f"{gold.language}: {unalignable} of {len(forms)} gold words dropped "
+                f"because the tokenizer's character offsets do not tile them, so "
+                f"there are no boundaries to compare"
+            )
+        return words
 
     def detect_undertrained(
         self,

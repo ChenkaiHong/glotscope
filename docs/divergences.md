@@ -32,31 +32,60 @@ row. Glotscope validates Gini with hand-computed and property tests until reprod
 artifacts exist; it does not reconstruct and tune a tokenizer to the published numbers. See
 [`m0-source-audit.md`](m0-source-audit.md#u3-parity-aware-bpe-artifacts).
 
-## Morphology (§7.7) computes, but no corpus feeds it yet
+## MorphyNet's gold is canonical, so most of it cannot be scored
 
-**Status:** a stated absence, narrower than it was. The measures themselves are gated.
+**Status:** an upstream property, measured and reported rather than worked around.
 
-All three §7.7 measures are implemented in `morphology.py` — MorphScore v1 (binary accuracy on the
-annotated stem–suffix boundary), MorphScore v2 (P/R/F1 over that same boundary), and full alignment
-(P/R/F1 over *all* boundaries, suffix–suffix included). `gathered → g/a/t/h/e/r/e/d` reproduces
-boundary-F1 `0.25` exactly and is a gate; the derived Turkish `2/3` is tested as the entry above
-prescribes.
+§7.7(c) scores full alignment against MorphyNet, and boundaries are **character offsets** — the gold
+pieces and the tokenizer's pieces have to index into the same string. MorphyNet's segmentation column
+does not satisfy that. It is *canonical*: `microtome|ing` against the inflected form `microtoming`,
+Mongolian `далай|аар` against `далайгаар`. Concatenating the morphemes spells a different word, so
+offsets taken from them describe a string nobody tokenized, and every score computed from them looks
+entirely reasonable.
 
-What is **not** built is the path from a corpus to those measures: nothing parses MorphyNet's TSVs
-into gold segmentations, and `analyze` neither requests nor emits a `MorphologyResult`. The registry
-entry `morphynet` exists with its download recipe and `MORPH_GOLD` capability, and glotscope ships no
-corpora (D12), so the gap is the loader rather than the metric.
+Measured over the published files rather than assumed:
 
-Recorded here because G3's exit condition is that every §7 subsection has either a reference test or
-an entry in this file, and a metric that is computable but unreachable from a run is exactly the kind
-of half-state that reads as "implemented" in a feature list. A reader comparing glotscope against a
-tool that publishes morphology numbers should know that glotscope currently publishes none.
+| File | Rows | `-` sentinel | Canonical mismatch | Usable |
+|---|---|---|---|---|
+| `eng/eng.inflectional.v1.tsv` | 649,593 | 66.05% | 9.75% | **24.20%** |
+| `mon/mon.inflectional.v1.tsv` | 30,129 | 0% | 69.59% | **30.41%** |
 
-Two properties are enforced by the types rather than by convention: precision is non-optional in the
-return type (D11) — recall alone rewards oversegmentation, and a character-level tokenizer earns
-perfect recall on `gathered` — and Semitic root-and-pattern and isolating languages return
-`TypologicalScope.OUT_OF_SCOPE` carrying no numbers at all, even though the reference implementation
-publishes numbers there (see the next entry).
+`glotscope.morphynet` drops both classes plus zero-length morphemes and forms carrying conflicting
+segmentations, and **counts every drop**: the counts go into the §9 warnings array beside the number
+they constrain, because a reader told an F1 without being told it describes a quarter of the file
+will read it as a statement about the language.
+
+Consequence for comparability: a published `full_alignment` is over the usable subset of a pinned
+MorphyNet commit. Another implementation that repairs the canonical forms — by applying orthographic
+rules, or by aligning approximately — is measuring a larger and different set. That is a divergence
+in the *input*, not in the formula, and it is why the coverage warning is not optional.
+
+Two further upstream facts, recorded because they shape what can be run: of MorphyNet's 15 languages
+only 12 publish an inflectional file (`hbs`, `pol` and `rus` ship derivational only), and **Turkish is
+absent altogether**, although §10.2 keeps it in the core set as the canonical MorphScore test bed.
+Upstream file names are irregular (`por/pt.inflectional.v1.tsv`, `hun/hu.inflectional.segmentation.v1.tsv`,
+`spa` split across two parts), so the registry recipe asks for a rename into the standard corpus
+layout rather than constructing a filename from a language code.
+
+## Sub-character token splits claim no morpheme boundary
+
+**Status:** deliberate divergence, and it moves numbers in the opposite direction to the reference
+implementations.
+
+Predicted boundaries come from the tokenizer's **character offsets**, not from decoded token strings.
+A byte-level vocabulary spells a space `Ġ` and a byte-fallback vocabulary spells one byte `<0xNN>`,
+and neither string's length is a character offset; more importantly, several tokens covering one
+multi-byte character all report that character's span, so they collapse to a single piece and no
+boundary is claimed inside a character.
+
+§7.7 rule 1 records that Llama tokenizers "split below the character level on non-Latin scripts and
+score artificially high". Under offsets that inflation does not happen — a word split into bytes
+inside every character scores as a word the tokenizer did not split at all. glotscope therefore
+reports *lower* alignment than an implementation counting decoded pieces, and the difference is
+largest exactly where the published critique says the artifact is worst.
+
+A word whose offsets do not tile it — a model with no UNK drops what it cannot represent, and returns
+zero tokens — is dropped and counted in the warnings rather than scored.
 
 ## Morphological alignment outside typological scope
 

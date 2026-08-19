@@ -52,7 +52,7 @@ and the repository it was exported from is not recoverable from the bytes.
 ``--license-filter=commercial`` reads these fields, so an unverifiable guess here
 would be worse than an explicit unknown."""
 
-SCHEMA_VERSION = "1.2"
+SCHEMA_VERSION = "1.3"
 """Bumped whenever any serialized key or enum value changes.
 
 1.2 added ``p_continued`` to the per-language block: §7.1 defines it beside

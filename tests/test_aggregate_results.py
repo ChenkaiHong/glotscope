@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from glotscope.aggregate import BoundaryCounts
-from glotscope.enums import RenyiNormalizer, TypologicalScope
+from glotscope.enums import MorphologicalType, RenyiNormalizer, TypologicalScope
 from glotscope.errors import IncomparableError
 from glotscope.results import (
     CompressionResult,
@@ -42,10 +42,35 @@ def test_result_contracts_sort_costs_and_enforce_morphological_scope() -> None:
     }
 
     out_of_scope = MorphologyResult(
-        "cmn", TypologicalScope.OUT_OF_SCOPE, None, None, None, False, False
+        "cmn",
+        MorphologicalType.ISOLATING,
+        TypologicalScope.OUT_OF_SCOPE,
+        None,
+        None,
+        None,
+        False,
+        False,
     )
     assert out_of_scope.scope is TypologicalScope.OUT_OF_SCOPE
     with pytest.raises(ValueError, match="OUT_OF_SCOPE"):
-        MorphologyResult("cmn", TypologicalScope.OUT_OF_SCOPE, 0.5, None, None, False, False)
+        MorphologyResult(
+            "cmn",
+            MorphologicalType.ISOLATING,
+            TypologicalScope.OUT_OF_SCOPE,
+            0.5,
+            None,
+            None,
+            False,
+            False,
+        )
     with pytest.raises(ValueError, match="carries no measure"):
-        MorphologyResult("tur", TypologicalScope.IN_SCOPE, None, None, None, False, False)
+        MorphologyResult(
+            "tur",
+            MorphologicalType.AGGLUTINATIVE,
+            TypologicalScope.IN_SCOPE,
+            None,
+            None,
+            None,
+            False,
+            False,
+        )

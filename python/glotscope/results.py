@@ -19,7 +19,12 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from glotscope.aggregate import BoundaryCounts
-from glotscope.enums import RenyiNormalizer, Segmenter, TypologicalScope
+from glotscope.enums import (
+    MorphologicalType,
+    RenyiNormalizer,
+    Segmenter,
+    TypologicalScope,
+)
 from glotscope.errors import IncomparableError
 
 __all__ = [
@@ -264,6 +269,13 @@ class MorphologyResult:
     """
 
     language: str
+    morphological_type: MorphologicalType
+    """The classification :attr:`scope` was derived from. Published because
+    ``scope`` cannot be inverted — fusional and agglutinative both read
+    ``in_scope`` — so a result carrying only the scope could not be regenerated
+    from its own document, and because the classification is itself a claim about
+    the language rather than a measurement."""
+
     scope: TypologicalScope
     morphscore_v1: float | None
     """Binary accuracy on one annotated stem-suffix boundary, excluding
@@ -285,6 +297,14 @@ class MorphologyResult:
     """Likewise a recorded parameter with no default."""
 
     def __post_init__(self) -> None:
+        expected = TypologicalScope.for_type(self.morphological_type)
+        if self.scope is not expected:
+            raise ValueError(
+                f"{self.language!r} is {self.morphological_type.value}, which is "
+                f"{expected.value}, but the result says {self.scope.value}. §7.7 "
+                f"rule 2 derives scope from the type; letting them disagree would "
+                f"publish a number for a language the API exists to refuse."
+            )
         measures = (self.morphscore_v1, self.morphscore_v2, self.full_alignment)
         if self.scope is TypologicalScope.OUT_OF_SCOPE:
             if any(m is not None for m in measures):

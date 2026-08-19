@@ -33,7 +33,7 @@ from glotscope.aggregate import BoundaryCounts, align_boundaries
 from glotscope.enums import MorphologicalType, TypologicalScope
 from glotscope.results import MorphologyResult
 
-__all__ = ["AlignedWord", "boundaries", "morphology"]
+__all__ = ["AlignedWord", "boundaries", "morphology", "pieces_from_offsets"]
 
 
 def boundaries(pieces: Sequence[str]) -> frozenset[int]:
@@ -49,6 +49,58 @@ def boundaries(pieces: Sequence[str]) -> frozenset[int]:
         running += len(piece)
         offsets.append(running)
     return frozenset(offsets)
+
+
+def pieces_from_offsets(
+    word: str,
+    offsets: Sequence[tuple[int, int]],
+    *,
+    shift: int = 0,
+) -> tuple[str, ...] | None:
+    """Slice a word into the pieces a tokenizer's character offsets describe.
+
+    Offsets rather than decoded tokens, because decoding is where the two
+    families break in opposite directions: a byte-level vocabulary spells a space
+    ``Ġ`` and a byte-fallback vocabulary spells one byte ``<0xNN>``, and neither
+    string's length is the word's character offset.
+
+    ``tokenizers`` reports offsets in **characters** into the input it was given,
+    and tokens covering less than one character all report that character's span.
+    So a two-byte Cyrillic character encoded as two byte tokens yields one piece
+    and one empty one; the empty piece is dropped, and no boundary is claimed
+    inside a character. That is deliberate: counting sub-character splits as
+    boundaries is what earns a byte-fallback tokenizer artificially high recall
+    on non-Latin scripts (§7.7 rule 1), and it would be a claim about UTF-8
+    rather than about morphology.
+
+    Args:
+        word: the word the offsets index into.
+        offsets: ``(start, end)`` per token, in token order.
+        shift: characters prepended before encoding — 1 under the leading-space
+            convention (§7.1 rule 5), which shifts every offset by one.
+
+    Returns:
+        The pieces, which concatenate to ``word``, or ``None`` if the offsets do
+        not tile it. ``None`` is a refusal rather than a fallback: a pretokenizer
+        that reorders or drops spans cannot be scored as boundaries, and the
+        caller counts what it dropped.
+    """
+    if not offsets:
+        return None
+    length = len(word)
+    cut = 0
+    pieces: list[str] = []
+    for _, raw_end in offsets:
+        end = min(max(raw_end - shift, 0), length)
+        if end < cut:
+            return None
+        piece = word[cut:end]
+        if piece:
+            pieces.append(piece)
+        cut = end
+    if cut != length:
+        return None
+    return tuple(pieces)
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,21 +218,22 @@ def morphology(
             of the alignment. Also a recorded parameter with no default.
 
     Raises:
-        ValueError: if ``words`` is empty. An F1 of 0.0 over nothing reads as
-            "this tokenizer aligns nothing", which is a claim about the
-            tokenizer rather than about the input.
+        ValueError: if ``words`` is empty and the language is in scope. An F1 of
+            0.0 over nothing reads as "this tokenizer aligns nothing", which is a
+            claim about the tokenizer rather than about the input. An
+            out-of-scope language returns before this check, since no batch would
+            change the answer.
     """
-    if not words:
-        raise ValueError(
-            f"{language!r}: no words to score. An F1 of 0.0 over an empty batch "
-            f"reads as a finding about the tokenizer when it is a fact about "
-            f"the input."
-        )
-
+    # Scope first, and deliberately before the empty check: it is a property of
+    # the language, not of the batch. Semitic root-and-pattern morphology has
+    # nothing to score however many words arrive, so demanding a non-empty batch
+    # before saying so would make the caller tokenize a corpus to be told the
+    # measure does not apply to it.
     scope = TypologicalScope.for_type(morphological_type)
     if scope is TypologicalScope.OUT_OF_SCOPE:
         return MorphologyResult(
             language=language,
+            morphological_type=morphological_type,
             scope=scope,
             morphscore_v1=None,
             morphscore_v2=None,
@@ -189,10 +242,18 @@ def morphology(
             include_single_token_words=include_single_token_words,
         )
 
+    if not words:
+        raise ValueError(
+            f"{language!r}: no words to score. An F1 of 0.0 over an empty batch "
+            f"reads as a finding about the tokenizer when it is a fact about "
+            f"the input."
+        )
+
     scored = [word for word in words if include_single_token_words or not word.is_single_token]
     predicted = [sorted(word.predicted_boundaries) for word in scored]
     return MorphologyResult(
         language=language,
+        morphological_type=morphological_type,
         scope=scope,
         morphscore_v1=_accuracy(words),
         morphscore_v2=_counts(predicted, [sorted(w.stem_suffix_boundary) for w in scored]),

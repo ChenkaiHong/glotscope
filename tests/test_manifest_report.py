@@ -129,8 +129,8 @@ def test_manifest_serializes_optional_tiers_and_contested_parameters() -> None:
 
     # Pinned as a literal on purpose: a serialized key changing without the
     # version moving is the failure this assertion exists to make impossible.
-    # 1.2 added p_continued to the per-language block.
-    assert document["schema_version"] == "1.2"
+    # 1.2 added p_continued to the per-language block; 1.3 added morphology.
+    assert document["schema_version"] == "1.3"
     assert document["backend"] == "python"
     assert document["manifest"]["tokenizer"] == {
         "id": "acme/tokenizer",

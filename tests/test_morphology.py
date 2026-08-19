@@ -23,7 +23,7 @@ from __future__ import annotations
 import pytest
 
 from glotscope.enums import MorphologicalType, TypologicalScope
-from glotscope.morphology import AlignedWord, boundaries, morphology
+from glotscope.morphology import AlignedWord, boundaries, morphology, pieces_from_offsets
 from glotscope.results import MorphologyResult
 
 _GATHERED = AlignedWord(
@@ -237,3 +237,38 @@ def test_morphscore_is_none_rather_than_zero_when_no_word_qualifies() -> None:
     assert result.morphscore_v1 is None
     assert result.full_alignment is not None
     assert result.full_alignment.false_negative == 2
+
+
+def test_offsets_become_the_pieces_the_word_is_scored_from() -> None:
+    # What `tokenizers` reports for a four-character word split per character.
+    assert pieces_from_offsets("cats", [(0, 1), (1, 2), (2, 3), (3, 4)]) == ("c", "a", "t", "s")
+
+
+def test_the_leading_space_marker_is_shifted_away_rather_than_scored() -> None:
+    # Encoding " cats" puts the space in its own token spanning (0, 1). Left in,
+    # its zero-length piece would put a boundary at offset 0 — the start of the
+    # word, which is not a boundary between anything, and one free false
+    # positive per word.
+    offsets = [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)]
+
+    pieces = pieces_from_offsets("cats", offsets, shift=1)
+
+    assert pieces == ("c", "a", "t", "s")
+    assert boundaries(pieces) == frozenset({1, 2, 3})
+
+
+def test_tokens_inside_one_character_claim_no_boundary() -> None:
+    # Two byte tokens covering one two-byte character both report that
+    # character's span. Counting them as pieces would score a boundary inside a
+    # character, which is a claim about UTF-8 rather than about morphology.
+    offsets = [(0, 1), (0, 1), (1, 2), (1, 2)]
+
+    assert pieces_from_offsets("ab", offsets) == ("a", "b")
+
+
+def test_offsets_that_do_not_tile_the_word_are_refused() -> None:
+    # Each of these would otherwise produce boundaries measured against a string
+    # the tokenizer never saw, and the scores would look entirely reasonable.
+    assert pieces_from_offsets("cats", []) is None
+    assert pieces_from_offsets("cats", [(0, 1), (1, 2)]) is None
+    assert pieces_from_offsets("cats", [(0, 3), (0, 1), (3, 4)]) is None

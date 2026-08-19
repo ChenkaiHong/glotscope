@@ -41,7 +41,7 @@ from glotscope.compare import compare as compare_results
 from glotscope.corpus import REGISTRY, Corpus, LoadedCorpus
 from glotscope.document import load_result
 from glotscope.embeddings import Embeddings
-from glotscope.enums import Normalization, RenyiNormalizer, Segmenter
+from glotscope.enums import MorphologicalType, Normalization, RenyiNormalizer, Segmenter
 from glotscope.errors import GlotscopeError, TokenizerLoadError
 from glotscope.manifest import Manifest, ParameterManifest, canonical_json, environment
 from glotscope.report import Report
@@ -49,6 +49,45 @@ from glotscope.results import CorpusMetrics
 from glotscope.tokenizer import Tokenizer
 
 __all__ = ["build_parser", "main"]
+
+_MORPHOLOGICAL_TYPES = tuple(member.value for member in MorphologicalType)
+
+
+def _morphological_types(pairs: Sequence[str] | None) -> Mapping[str, MorphologicalType] | None:
+    """Parse repeated ``LANG=TYPE`` arguments (§7.7 rule 2).
+
+    ``None`` when the flag was never passed, which is what tells ``analyze``
+    apart from a run that passed an empty mapping and meant it: the first is "no
+    morphology run", the second is "these languages, none of them declared", and
+    the second is a mistake worth a refusal.
+    """
+    if pairs is None:
+        return None
+    types: dict[str, MorphologicalType] = {}
+    for pair in pairs:
+        language, separator, value = pair.partition("=")
+        if not separator or not language:
+            raise ValueError(
+                f"--morphological-type takes LANG=TYPE, got {pair!r}. Scope is "
+                f"derived per language and there is no default (§7.7 rule 2)."
+            )
+        try:
+            types[language] = MorphologicalType(value)
+        except ValueError as exc:
+            raise ValueError(
+                f"unknown morphological type {value!r} for {language!r}; "
+                f"one of {list(_MORPHOLOGICAL_TYPES)}"
+            ) from exc
+    return types
+
+
+def _tri_state(value: str | None) -> bool | None:
+    """``"true"``/``"false"``/unset. Spelled out because §7.7 rule 4 gives these
+    parameters no default, and a store_true flag would supply one silently."""
+    if value is None:
+        return None
+    return value == "true"
+
 
 _REFUSED = 1
 """Exit code for a typed refusal: the library declined to emit a number."""
@@ -126,6 +165,33 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="recorded either way; specials inflate token counts and do not decode "
         "back to the source text",
+    )
+    analyze.add_argument(
+        "--morphological-type",
+        action="append",
+        metavar="LANG=TYPE",
+        default=None,
+        help=(
+            "repeatable, e.g. --morphological-type tur_Latn=agglutinative. Required "
+            "for a corpus with gold morphology and rejected without one. Scope is "
+            f"derived from it (§7.7 rule 2); one of {_MORPHOLOGICAL_TYPES}"
+        ),
+    )
+    analyze.add_argument(
+        "--frequency-weighted",
+        choices=["true", "false"],
+        default=None,
+        help=(
+            "whether the gold is a stream of occurrences rather than a list of "
+            "types. Recorded, not applied, and spelled out rather than a flag "
+            "because §7.7 rule 4 gives it no default"
+        ),
+    )
+    analyze.add_argument(
+        "--include-single-token-words",
+        choices=["true", "false"],
+        default=None,
+        help="whether words the tokenizer emitted whole are scored; no default",
     )
     analyze.add_argument("--license-filter", choices=["commercial"], default=None)
     analyze.add_argument("--parity-reference", default=None)
@@ -320,6 +386,9 @@ def _build_report(
     renyi_alpha: float | None,
     renyi_normalizer: RenyiNormalizer,
     nominal_vocab_size: int | None,
+    morphological_types: Mapping[str, MorphologicalType] | None = None,
+    frequency_weighted: bool | None = None,
+    include_single_token_words: bool | None = None,
 ) -> Report:
     """Assemble the §9 document. One code path, used by ``analyze`` and ``verify``.
 
@@ -334,6 +403,9 @@ def _build_report(
         normalization=normalization,
         add_special_tokens=add_special_tokens,
         segmenter=segmenter,
+        morphological_types=morphological_types,
+        frequency_weighted=frequency_weighted,
+        include_single_token_words=include_single_token_words,
     )
     tier1 = replace(
         tier1,
@@ -396,6 +468,9 @@ def _analyze(args: argparse.Namespace) -> int:
         renyi_alpha=args.renyi_alpha,
         renyi_normalizer=RenyiNormalizer(args.renyi_normalizer),
         nominal_vocab_size=args.nominal_vocab_size,
+        morphological_types=_morphological_types(args.morphological_type),
+        frequency_weighted=_tri_state(args.frequency_weighted),
+        include_single_token_words=_tri_state(args.include_single_token_words),
     )
     _emit(canonical_json(report.to_dict()) + "\n", args.out)
     return 0
@@ -562,6 +637,25 @@ def _verify(args: argparse.Namespace) -> int:
     )
     loaded = corpus.load(args.corpus_root, license_filter=args.license_filter)
     segmenter = parameters.get("segmenter")
+    # §7.7's three recorded parameters are published in the per-language
+    # morphology block rather than in ParameterManifest, so they are read from
+    # where the value actually is — the same rule this function already follows
+    # for Renyi's alpha and normalizer. Reproducing a morphology run without them
+    # would either refuse or score under a convention the document did not use.
+    morphology_blocks = [
+        entry["morphology"]
+        for entry in committed.get("tier1", {}).get("per_language", {}).values()
+        if "morphology" in entry
+    ]
+    morphological_types = (
+        {
+            language: MorphologicalType(entry["morphology"]["morphological_type"])
+            for language, entry in committed["tier1"]["per_language"].items()
+            if "morphology" in entry
+        }
+        if morphology_blocks
+        else None
+    )
     report = _build_report(
         tokenizer,
         loaded,
@@ -583,6 +677,16 @@ def _verify(args: argparse.Namespace) -> int:
             corpus_level.get("renyi_normalizer") or parameters.get("renyi_normalizer") or "observed"
         ),
         nominal_vocab_size=corpus_level.get("renyi_nominal_vocab_size"),
+        morphological_types=morphological_types,
+        # One analyze call produced every block, so the flags are the same in all
+        # of them; the first is read rather than cross-checked because a document
+        # that disagreed with itself could not have been produced by this library.
+        frequency_weighted=morphology_blocks[0]["frequency_weighted"]
+        if morphology_blocks
+        else None,
+        include_single_token_words=(
+            morphology_blocks[0]["include_single_token_words"] if morphology_blocks else None
+        ),
     )
 
     regenerated = json.loads(canonical_json(report.to_dict()))
