@@ -96,6 +96,33 @@ morphological-alignment score. Semitic root-and-pattern morphology has no linear
 and isolating languages lack affixation. This differs from reference tables that publish values for
 Hebrew and Mandarin; the Mandarin row is a single-token artifact rather than morphological alignment.
 
+## `compare` takes result documents where §8.2 spells tokenizers
+
+**Status:** deliberate API divergence, confirmed rather than accidental.
+
+§8.2 writes the subcommand as `glotscope compare <tok1> <tok2> ... --metric parity`. glotscope
+implements `glotscope compare a.json b.json ... --metric parity`, over published §9 documents.
+
+The reason is the refusal §8.2 itself requires two lines later: *"`compare` refuses to table metrics
+computed under different segmenters, α values, normalizers, or language sets. This is a feature and
+the error message should say so."* That refusal is **unreachable** from the tokenizer form. Handed two
+tokenizers, `compare` would have to analyze them itself, under one shared set of command-line flags —
+so the segmenter, α, normalizer and language set would be identical by construction, and
+`IncomparableError` could never fire. The check that §8.2 calls the feature would exist and never run.
+
+Over documents it fires, because two files can disagree, and disagreement between published results is
+exactly the situation a leaderboard has to refuse to table. Comparability is scoped per metric through
+`results.require_comparable`.
+
+Two consequences worth stating rather than discovering:
+
+- STRR is deliberately absent from `compare`'s `METRICS`. §9 publishes neither `lowercased` nor
+  `n_words`, so its comparability key cannot be reconstructed from a document, and tabling it would
+  mean comparing two numbers whose conventions are unknown. Closing that gap is a schema change, held
+  until something needs it.
+- Comparing results requires them to have been published first, which is the shape the leaderboard
+  wants anyway: `results/` holds documents, and the nightly re-run compares documents to documents.
+
 ## Zouhar Rényi README values
 
 **Status:** upstream example discrepancy; the documented numbers are not an α=2.5 reproduction gate.
