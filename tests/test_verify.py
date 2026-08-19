@@ -22,10 +22,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 from tokenizers import Tokenizer as BackendTokenizer
 from tokenizers import decoders, models, pre_tokenizers
 
+from _safetensors import f32, write_safetensors
 from glotscope.cli import main
 from glotscope.corpus import Corpus
 from glotscope.lint import byte_to_unicode
@@ -226,3 +228,87 @@ def test_verify_regenerates_the_corpus_level_metrics_the_document_carries(
     result.write_text(json.dumps(document), encoding="utf-8")
     assert main(_verify(tokenizer, result, tmp_path)) == 1
     assert "gini" in capsys.readouterr().err
+
+
+def _produce_detect(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Run ``detect``, returning the tokenizer, the weights and the result."""
+    tokenizer = _tokenizer_json(tmp_path / "tokenizer.json")
+    vocab_size = 256
+    scale = np.arange(1, vocab_size + 1, dtype=np.float32).reshape(vocab_size, 1)
+    weights = write_safetensors(
+        tmp_path / "model.safetensors",
+        {"wte.weight": f32(scale * np.full((vocab_size, 4), 0.5))},
+    )
+    result = tmp_path / "detect.json"
+    assert main(["detect", str(tokenizer), "--weights", str(weights), "--out", str(result)]) == 0
+    return tokenizer, weights, result
+
+
+def test_a_tier2_result_verifies_against_the_inputs_that_produced_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # G4 says *every* result regenerates, and `detect` writes results. Verify
+    # dispatched on the presence of a corpus block, which a Tier 2 document
+    # correctly has none of, so it refused every one of them — leaving the whole
+    # tier outside the promise the command exists to keep.
+    tokenizer, weights, result = _produce_detect(tmp_path)
+
+    exit_code = main(
+        ["verify", str(result), "--tokenizer", str(tokenizer), "--weights", str(weights)]
+    )
+
+    assert exit_code == 0
+    assert "reproduced" in capsys.readouterr().out
+
+
+def test_a_tampered_tier2_number_fails_and_names_where(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tokenizer, weights, result = _produce_detect(tmp_path)
+    document = json.loads(result.read_text(encoding="utf-8"))
+    document["tier2"]["candidates_post_exclusion"] = 999
+    result.write_text(json.dumps(document), encoding="utf-8")
+
+    exit_code = main(
+        ["verify", str(result), "--tokenizer", str(tokenizer), "--weights", str(weights)]
+    )
+
+    assert exit_code == 1
+    assert "candidates_post_exclusion" in capsys.readouterr().err
+
+
+def test_verifying_a_tier2_result_without_the_weights_says_so(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # §9 keeps filesystem paths out of the manifest, so the weights cannot be
+    # resolved from the document any more than the tokenizer can. Saying which
+    # flag is missing is the difference between a fixable argument and an
+    # apparently broken command.
+    _, _, result = _produce_detect(tmp_path)
+    tokenizer = tmp_path / "tokenizer.json"
+
+    exit_code = main(["verify", str(result), "--tokenizer", str(tokenizer)])
+
+    assert exit_code == 1
+    assert "--weights" in capsys.readouterr().err
+
+
+def test_the_wrong_weights_fail_on_identity_not_on_the_numbers(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The same rule the tokenizer already follows: the manifest pins the
+    # artifact by hash and by nothing else, so handing verify a different
+    # checkpoint must fail on identity rather than produce different numbers and
+    # blame the result.
+    tokenizer, _, result = _produce_detect(tmp_path)
+    other = write_safetensors(
+        tmp_path / "other.safetensors",
+        {"wte.weight": f32(np.full((256, 4), 0.25, dtype=np.float32))},
+    )
+
+    exit_code = main(
+        ["verify", str(result), "--tokenizer", str(tokenizer), "--weights", str(other)]
+    )
+
+    assert exit_code == 1
+    assert "shard_sha256" in capsys.readouterr().err

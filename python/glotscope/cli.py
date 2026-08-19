@@ -44,7 +44,7 @@ from glotscope.embeddings import Embeddings
 from glotscope.enums import MorphologicalType, Normalization, RenyiNormalizer, Segmenter
 from glotscope.errors import GlotscopeError, TokenizerLoadError
 from glotscope.manifest import Manifest, ParameterManifest, canonical_json, environment
-from glotscope.report import Report
+from glotscope.report import Report, Tier0Report
 from glotscope.results import CorpusMetrics
 from glotscope.tokenizer import Tokenizer
 
@@ -258,6 +258,17 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help=(
             "the tokenizer.json the result describes. Required because §9 keeps "
+            "filesystem paths out of the manifest, so the document records what "
+            "the artifact is (a SHA-256) but not where it lives. The hash is "
+            "checked against the manifest before anything is recomputed."
+        ),
+    )
+    verify.add_argument(
+        "--weights",
+        default=None,
+        help=(
+            "the embedding tensors the result describes, for a document carrying "
+            "a tier2 block. Required for the same reason --tokenizer is: §9 keeps "
             "filesystem paths out of the manifest, so the document records what "
             "the artifact is (a SHA-256) but not where it lives. The hash is "
             "checked against the manifest before anything is recomputed."
@@ -522,8 +533,21 @@ document, so it must fail.
 """
 
 
-def _detect(args: argparse.Namespace) -> int:
-    """Tier 0 + Tier 2 in one §9 document.
+def _detect_report(
+    tokenizer: Tokenizer,
+    tier0: Tier0Report,
+    embeddings: Embeddings,
+    *,
+    top_pct: float,
+    remove_first_pc: bool,
+) -> Report:
+    """Assemble the Tier 0 + Tier 2 document. One code path, used by ``detect``
+    and ``verify``.
+
+    The same rule :func:`_build_report` follows for Tier 1, and for the same
+    reason: a verify that assembled the document its own way would be comparing
+    a published result against a second implementation rather than regenerating
+    it, and the two could drift apart without either being wrong on its own.
 
     No corpus block: Tier 2 reads weights and needs no text, so the manifest
     omits the corpus rather than writing nulls into it — §9's nesting is what a
@@ -534,17 +558,16 @@ def _detect(args: argparse.Namespace) -> int:
     corpus text, and Tier 0's reachability check encodes each vocabulary entry
     verbatim with no special tokens. Copying ``analyze``'s defaults in would put
     a claim about text processing into a document that processed none.
+
+    ``tier0`` is passed in rather than re-linted, because the caller has already
+    computed it to size the embedding read.
     """
-    tokenizer = _load_tokenizer(args.tokenizer, args.revision)
-    tier0 = tokenizer.lint()
-    embeddings = _load_embeddings(args.weights, vocab_size=tier0.vocab_size)
     tier2 = tokenizer.detect_undertrained(
         embeddings,
-        top_pct=args.top_pct,
-        remove_first_pc=args.remove_first_pc,
+        top_pct=top_pct,
+        remove_first_pc=remove_first_pc,
     )
-
-    report = Report(
+    return Report(
         tier0=tier0,
         tier2=tier2,
         manifest=Manifest(
@@ -553,7 +576,7 @@ def _detect(args: argparse.Namespace) -> int:
                 leading_space=False,
                 normalization=Normalization.NONE,
                 add_special_tokens=False,
-                top_pct=args.top_pct,
+                top_pct=top_pct,
                 candidates_pre_exclusion=tier2.candidates_pre_exclusion,
                 candidates_post_exclusion=tier2.candidates_post_exclusion,
                 first_pc_removed=tier2.first_pc_removed,
@@ -564,6 +587,20 @@ def _detect(args: argparse.Namespace) -> int:
             weights=embeddings.manifest,
         ),
         warnings=tokenizer.warnings,
+    )
+
+
+def _detect(args: argparse.Namespace) -> int:
+    """Tier 0 + Tier 2 in one §9 document."""
+    tokenizer = _load_tokenizer(args.tokenizer, args.revision)
+    tier0 = tokenizer.lint()
+    embeddings = _load_embeddings(args.weights, vocab_size=tier0.vocab_size)
+    report = _detect_report(
+        tokenizer,
+        tier0,
+        embeddings,
+        top_pct=args.top_pct,
+        remove_first_pc=args.remove_first_pc,
     )
     document = report.to_dict()
     _echo_warnings(document)
@@ -629,11 +666,10 @@ def _verify(args: argparse.Namespace) -> int:
     """
     committed = json.loads(Path(args.result).read_text(encoding="utf-8"))
     manifest = committed.get("manifest")
-    if not isinstance(manifest, Mapping) or "corpus" not in manifest:
+    if not isinstance(manifest, Mapping):
         raise ValueError(
-            f"{args.result!r} carries no corpus manifest, so there is nothing to "
-            f"regenerate from. `glotscope lint` emits a Tier 0 document without "
-            f"one; verify expects the document `glotscope analyze` writes."
+            f"{args.result!r} is not a glotscope result document: it carries no "
+            f"manifest, so there is nothing to regenerate from."
         )
 
     tokenizer = _load_tokenizer(args.tokenizer, None)
@@ -646,6 +682,132 @@ def _verify(args: argparse.Namespace) -> int:
             f"pins the artifact by hash and by nothing else",
         )
 
+    # Dispatch on which tiers the document declares, not on the presence of a
+    # corpus. Keying off the corpus alone refused every Tier 2 result — `detect`
+    # correctly writes no corpus block, because Tier 2 reads weights and no text
+    # — which left the whole tier outside G4's promise that a published number
+    # regenerates. §9's nesting is what says which tiers ran; reading it is the
+    # generalization, and it is what a third producer will need too.
+    report = _regenerate(args, committed, manifest, tokenizer)
+
+    regenerated = json.loads(canonical_json(report.to_dict()))
+    difference = _first_difference(_comparable(committed), _comparable(regenerated))
+    if difference is not None:
+        print(f"glotscope verify: {args.result} did not reproduce: {difference}", file=sys.stderr)
+        return _REFUSED
+
+    print(f"{args.result}: reproduced bit-identically.")
+    print(
+        "environment is excluded from the comparison and reported instead: "
+        f"committed {manifest['environment']}, this run {environment().to_dict()}"
+    )
+    produced_by = committed.get("glotscope_version")
+    if produced_by != __version__:
+        # Worth saying loudly rather than burying: the numbers a previous
+        # release published still regenerate under this one. That is the claim
+        # G4 is for, and it is only visible when the versions differ.
+        print(
+            f"produced by glotscope {produced_by}, reproduced by {__version__} — "
+            f"the numbers regenerate across releases."
+        )
+    produced_backend = committed.get("backend")
+    if produced_backend != backend().value:
+        print(
+            f"produced on the {produced_backend} backend, reproduced on "
+            f"{backend().value} — backend parity holds for this result."
+        )
+    return 0
+
+
+def _regenerate(
+    args: argparse.Namespace,
+    committed: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    tokenizer: Tokenizer,
+) -> Report:
+    """Re-run whichever tiers the committed document declares.
+
+    Raises:
+        ValueError: for a document no subcommand writes — one carrying both a
+            corpus and a tier2 block, or neither. The first cannot be
+            regenerated because nothing produces it and there is no single run
+            to reproduce; the second is a ``lint`` document, which has no
+            recomputed numbers to compare.
+    """
+    has_corpus = "corpus" in manifest
+    has_tier2 = "tier2" in committed
+    if has_corpus and has_tier2:
+        raise ValueError(
+            f"{args.result!r} carries both a corpus and a tier2 block, and no "
+            f"subcommand writes that: `analyze` produces Tier 1 and `detect` "
+            f"produces Tier 2. Regenerating it would mean inventing a single run "
+            f"that never happened."
+        )
+    if has_tier2:
+        return _regenerate_detect(args, manifest, tokenizer)
+    if has_corpus:
+        return _regenerate_analyze(args, committed, manifest, tokenizer)
+    raise ValueError(
+        f"{args.result!r} carries neither a corpus nor a tier2 block, so it "
+        f"records no recomputed numbers. `glotscope lint` writes that document; "
+        f"verify expects one from `analyze` or `detect`."
+    )
+
+
+def _regenerate_detect(
+    args: argparse.Namespace,
+    manifest: Mapping[str, Any],
+    tokenizer: Tokenizer,
+) -> Report:
+    """Re-run Tier 0 + Tier 2 from the recorded parameters (§7.9, G4).
+
+    Raises:
+        ValueError: if ``--weights`` was not supplied, or if the supplied
+            checkpoint is not the one the manifest pins.
+    """
+    if args.weights is None:
+        raise ValueError(
+            f"{args.result!r} carries a tier2 block, so regenerating it needs the "
+            f"embedding tensors — pass --weights, exactly as --tokenizer is "
+            f"passed. §9 keeps filesystem paths out of the manifest: it records "
+            f"what the artifact is (a SHA-256), not where it lives."
+        )
+    weights_block = manifest.get("weights")
+    if weights_block is None:
+        raise ValueError(
+            f"{args.result!r} carries a tier2 block and no weights manifest, so "
+            f"the checkpoint it describes cannot be identified. It was not "
+            f"written by `glotscope detect`."
+        )
+
+    parameters = manifest["parameters"]
+    tier0 = tokenizer.lint()
+    embeddings = _load_embeddings(args.weights, vocab_size=tier0.vocab_size)
+    # The same rule the tokenizer follows two frames up: identity is checked
+    # before anything is recomputed, so the wrong checkpoint fails on what it is
+    # rather than by producing different numbers and blaming the result.
+    if embeddings.shard_sha256 != weights_block["shard_sha256"]:
+        raise ValueError(
+            f"{args.weights}: shard_sha256 {embeddings.shard_sha256} does not "
+            f"match the {weights_block['shard_sha256']} this result was produced "
+            f"with. The manifest pins the artifact by hash and by nothing else."
+        )
+    return _detect_report(
+        tokenizer,
+        tier0,
+        embeddings,
+        top_pct=parameters["top_pct"],
+        remove_first_pc=parameters["first_pc_removed"],
+    )
+
+
+def _regenerate_analyze(
+    args: argparse.Namespace,
+    committed: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    tokenizer: Tokenizer,
+) -> Report:
+    """Re-run Tier 0 + Tier 1 from the recorded parameters (§12.3, G4)."""
     corpus_block = manifest["corpus"]
     parameters = manifest["parameters"]
     corpus_level = committed.get("tier1", {}).get("corpus_level", {})
@@ -677,7 +839,7 @@ def _verify(args: argparse.Namespace) -> int:
         if morphology_blocks
         else None
     )
-    report = _build_report(
+    return _build_report(
         tokenizer,
         loaded,
         leading_space=parameters["leading_space"],
@@ -709,34 +871,6 @@ def _verify(args: argparse.Namespace) -> int:
             morphology_blocks[0]["include_single_token_words"] if morphology_blocks else None
         ),
     )
-
-    regenerated = json.loads(canonical_json(report.to_dict()))
-    difference = _first_difference(_comparable(committed), _comparable(regenerated))
-    if difference is not None:
-        print(f"glotscope verify: {args.result} did not reproduce: {difference}", file=sys.stderr)
-        return _REFUSED
-
-    print(f"{args.result}: reproduced bit-identically.")
-    print(
-        "environment is excluded from the comparison and reported instead: "
-        f"committed {manifest['environment']}, this run {environment().to_dict()}"
-    )
-    produced_by = committed.get("glotscope_version")
-    if produced_by != __version__:
-        # Worth saying loudly rather than burying: the numbers a previous
-        # release published still regenerate under this one. That is the claim
-        # G4 is for, and it is only visible when the versions differ.
-        print(
-            f"produced by glotscope {produced_by}, reproduced by {__version__} — "
-            f"the numbers regenerate across releases."
-        )
-    produced_backend = committed.get("backend")
-    if produced_backend != backend().value:
-        print(
-            f"produced on the {produced_backend} backend, reproduced on "
-            f"{backend().value} — backend parity holds for this result."
-        )
-    return 0
 
 
 def _compare(args: argparse.Namespace) -> int:
