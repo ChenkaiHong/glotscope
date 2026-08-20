@@ -257,6 +257,51 @@ Reversible on evidence: a treebank whose expansions are inflectional, surface-pr
 distributed would qualify, per treebank and never for "UD" as a whole. The three columns above are the
 test any candidate has to pass.
 
+## STRR's published values are not reproducible, because the convention is unstated
+
+**Status:** not a reproduction gate. The formula is implemented exactly; the *published numbers* cannot
+be regenerated from what the source reports.
+
+§7.6 is Nayeem, Alqahtani, Laskar, Mohiuddin & Bari, *Beyond Fertility* (arXiv:2510.09947):
+
+```
+STRR(T; W) = (1/n) Σ 1( |T(w_i)| = 1 ) × 100
+```
+
+The formula is unambiguous and glotscope matches it. What cannot be reproduced is any published STRR
+*value*, for two independent reasons.
+
+**The leading-space convention is not stated, and it dominates the result.** `τ("the")` and
+`τ(" the")` are different tokenizations of the same word, and for a byte-level BPE the second is
+frequently one token where the first is two — so the same tokenizer over the same word list scores
+tens of points apart depending on a choice the paper does not record. There is no way to tell which
+was used from the numbers alone, and picking one to match a table would be tuning a parameter until a
+result appeared, which §17 calls misconduct.
+
+So glotscope **returns a pair and offers no single-value counterpart**: `strr_bare` and
+`strr_leading_space`, both always, with `lowercased` recorded beside them. `StrrPair` deliberately
+exposes no `value` attribute — the refusal is structural rather than advisory, because an unqualified
+STRR is the thing that cannot be compared across two runs.
+
+**The word lists carry a confound the source documents but does not correct.** They are English
+frequency lists *translated*, not per-language frequency lists, so word rank does not mean the same
+thing in any two languages. Hindi scores lowest across every tokenizer tested despite 128k–255k
+vocabularies — a property of the list at least as much as of the tokenizers. Reproducing a published
+per-language ranking would therefore reproduce the confound rather than validate the implementation.
+
+**A scale bug found while writing this entry, and fixed rather than documented.** `strr()` returned a
+fraction while `Tier1Report.to_dict` published the number unchanged and every docstring described the
+conventions as differing "by tens of *points*". The same §9 field could carry `0.42` or `42.0`
+depending on which code path built the pair — `tests/test_tier1_report.py` had already assumed the
+percentage. §7's `× 100` is part of the formula, not presentation, so this was a deviation and not a
+convention: the implementation now matches. No published result was affected, because STRR appears in
+no committed `result.json` and `compare` does not offer the metric.
+
+**Consequence for comparability:** two STRR numbers may be compared only at the same convention, the
+same casing and the same word list. §9 publishes neither `lowercased` nor `n_words`, which is why
+`compare` excludes STRR — the same rule that later excluded gini. Publishing those two fields is a
+schema change and is parked with the other 1.4 candidates.
+
 ## Zouhar Rényi README values
 
 **Status:** upstream example discrepancy; the documented numbers are not an α=2.5 reproduction gate.

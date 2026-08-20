@@ -19,10 +19,24 @@ def test_strr_is_the_share_of_words_that_survive_as_one_token() -> None:
 
     result = strr(bare, leading_space, language="eng_Latn", lowercased=False)
 
-    assert result.bare == pytest.approx(2 / 3)
-    assert result.leading_space == pytest.approx(1 / 3)
+    assert result.bare == pytest.approx(200 / 3)
+    assert result.leading_space == pytest.approx(100 / 3)
     assert result.n_words == 3
     assert result.language == "eng_Latn"
+
+
+def test_strr_is_a_percentage_because_the_formula_says_so() -> None:
+    # §7.6 is `(1/n) sum 1(|T(w)| = 1) x 100`, and the scale is part of the
+    # formula rather than presentation. This returned a fraction while
+    # Tier1Report.to_dict published the number unchanged, so the same §9 field
+    # could carry 0.25 or 25.0 depending on which path built the pair — and a
+    # reader checking it against the source paper's table would be two orders of
+    # magnitude out with nothing to flag it.
+    one_of_four = aggregate_words([[1], [2, 3], [4, 5], [6, 7]])
+
+    result = strr(one_of_four, one_of_four, language="eng_Latn", lowercased=False)
+
+    assert result.bare == pytest.approx(25.0)
 
 
 def test_both_conventions_are_reported_and_can_disagree_sharply() -> None:
@@ -34,7 +48,7 @@ def test_both_conventions_are_reported_and_can_disagree_sharply() -> None:
 
     result = strr(bare, leading_space, language="deu_Latn", lowercased=True)
 
-    assert result.bare == 1.0
+    assert result.bare == 100.0
     assert result.leading_space == 0.0
     assert result.lowercased is True
 
@@ -58,7 +72,7 @@ def test_zero_length_words_stay_in_the_denominator() -> None:
 
     result = strr(bare, leading_space, language="tha_Thai", lowercased=False)
 
-    assert result.bare == pytest.approx(0.5)
+    assert result.bare == pytest.approx(50.0)
     assert result.n_words == 2
 
 
