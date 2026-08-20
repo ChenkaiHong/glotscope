@@ -141,14 +141,18 @@ def test_icu_and_whitespace_disagree_about_punctuation_on_the_same_english() -> 
     assert len(whitespace) == 3
 
 
-@pytest.mark.parametrize("segmenter", [Segmenter.STANZA, Segmenter.UDPIPE, Segmenter.UD_GOLD])
+@pytest.mark.parametrize("segmenter", [Segmenter.STANZA, Segmenter.UDPIPE])
 def test_the_unwritten_segmenters_are_reported_as_unbuilt_not_as_refusals(
     segmenter: Segmenter,
 ) -> None:
     # NotImplementedError, never SegmenterUnavailableError: these are scheduled,
     # and telling a caller to install an extra that would not help sends them
-    # after the wrong fix. STANZA and UDPIPE additionally need a pinned model,
-    # and UD_GOLD needs gold boundaries the corpus layer does not carry yet.
+    # after the wrong fix. Both additionally need a pinned model path.
+    #
+    # UD_GOLD was in this list and is now built. It raises ValueError naming the
+    # annotation to pass, which is a different answer: the adapter exists, and
+    # what is missing is an input only the caller has. See
+    # tests/test_gold_segmenter.py.
     with pytest.raises(NotImplementedError):
         get_segmenter(segmenter, language="eng_Latn")
 

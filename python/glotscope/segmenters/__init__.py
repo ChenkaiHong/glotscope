@@ -25,10 +25,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
+from glotscope.conllu import GoldSentences
 from glotscope.enums import Segmenter
 from glotscope.errors import SegmenterUnavailableError
 from glotscope.segmenters.builtin import load_icu, load_whitespace
 from glotscope.segmenters.east_asian import load_jieba, load_mecab
+from glotscope.segmenters.gold import UdGoldSegmenter
 from glotscope.segmenters.southeast_asian import load_khmer_nltk, load_pythainlp
 
 __all__ = ["WordSegmenter", "available", "get_segmenter"]
@@ -88,32 +90,48 @@ _UNBUILT: dict[Segmenter, str] = {
         "records, never a download on first use, which would put an unrecorded "
         "artifact behind a published number"
     ),
-    Segmenter.UD_GOLD: (
-        "UD_GOLD reads gold word boundaries out of a treebank, and the corpus "
-        "layer reads plain text one document per line. Gold boundaries need a "
-        "CoNLL-U path through Corpus.load first"
-    ),
 }
 """Scheduled, not refused. These raise ``NotImplementedError`` so a caller is
 told the feature is unbuilt rather than sent to install an extra that would not
 help."""
 
 
-def get_segmenter(segmenter: Segmenter, *, language: str) -> WordSegmenter:
+def get_segmenter(
+    segmenter: Segmenter,
+    *,
+    language: str,
+    gold: GoldSentences | None = None,
+) -> WordSegmenter:
     """Build the adapter for ``segmenter``, for ``language``.
 
     Args:
         segmenter: which convention to apply. There is no default (D6).
         language: the corpus language code. Used for the scope check and, for
             ICU, to pick the locale.
+        gold: parsed treebank annotation, required by ``UD_GOLD`` and ignored by
+            every other member. It is a parameter rather than something this
+            function loads because gold boundaries are a property of the corpus
+            being analyzed, not of the segmenter being selected.
 
     Raises:
         SegmenterUnavailableError: the optional extra is not installed.
         SegmenterScopeError: this segmenter is not built for this language.
         NotImplementedError: the adapter is scheduled but not written.
+        ValueError: if ``UD_GOLD`` is requested without ``gold``. It reads
+            annotation rather than predicting, so with none there is nothing to
+            read and a predicted fallback would be a different measurement.
     """
     if segmenter in _UNBUILT:
         raise NotImplementedError(f"{segmenter.value}: {_UNBUILT[segmenter]}.")
+    if segmenter is Segmenter.UD_GOLD:
+        if gold is None:
+            raise ValueError(
+                "UD_GOLD reads gold word boundaries out of a treebank, so it "
+                "needs the parsed annotation: pass gold=parse_conllu(...). "
+                "Predicting them instead is what UDPIPE and STANZA are for, and "
+                "§7.1 rule 1 forbids reporting one under the other's name."
+            )
+        return UdGoldSegmenter(gold=gold.by_text, treebank=gold.treebank)
     return _LOADERS[segmenter](language)
 
 

@@ -49,5 +49,6 @@ uv.lock
 # Recipes and checksums are committed; the artifacts are not.
 data/*
 !data/ud-license-audit.json
+!data/tier2-reference-validation.json
 corpora/
 *.safetensors

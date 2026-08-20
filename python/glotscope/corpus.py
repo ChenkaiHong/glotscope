@@ -203,13 +203,21 @@ REGISTRY: dict[str, CorpusSpec] = {
     ),
     "universal_dependencies": CorpusSpec(
         id="universal_dependencies",
-        capabilities=frozenset({Capability.WORD_SEGMENTATION, Capability.MORPH_GOLD}),
+        capabilities=frozenset({Capability.WORD_SEGMENTATION}),
         license="Per-treebank — see data/ud-license-audit.json",
         is_commercial_ok=False,
-        note="The UD 2.18 audit covers all 353 treebanks: 268 are commercial-compatible, "
-        "31 are noncommercial, and 54 require manual review. Record the exact treebank "
-        "because Korean "
-        "treebanks, for example, use different segmentation conventions.",
+        note="Gold word segmentation only — deliberately not morph_gold. UD marks "
+        "where a surface token differs from its syntactic words, which is a "
+        "different relation from morpheme structure and coincides with it only "
+        "sometimes. Measured over pinned treebanks: Spanish AnCora's expansions "
+        "are contractions that do not spell their own surface token (13.6% "
+        "concatenate, so 86.4% admit no character offsets at all), and Turkish "
+        "IMST's do concatenate (99.2%) but mark derivational boundaries on 6.34% "
+        "of words rather than the inflectional segmentation §7.7(c) scores. "
+        "MorphyNet is the morphology gold; see docs/divergences.md. The UD 2.18 "
+        "audit covers all 353 treebanks: 268 are commercial-compatible, 31 are "
+        "noncommercial, and 54 require manual review. Record the exact treebank, "
+        "because Korean treebanks disagree among themselves about what a word is.",
         recipe="UD 2.18 release archive from the LINDAT repository. Check each "
         "treebank against data/ud-license-audit.json before use: 31 are "
         "noncommercial and 54 need manual review.",
@@ -220,9 +228,20 @@ REGISTRY: dict[str, CorpusSpec] = {
         capabilities=frozenset({Capability.MORPH_GOLD}),
         license="CC-BY-SA",
         is_commercial_ok=True,
-        note="15 languages. Required for the full-alignment measure in §7.7(c).",
-        recipe="Derivational and inflectional TSVs from the MorphyNet GitHub "
-        "repository, pinned by commit.",
+        note="15 languages, of which 12 publish an inflectional file — hbs, pol "
+        "and rus ship derivational only, and Turkish is absent from MorphyNet "
+        "altogether although §10.2 keeps it as the canonical MorphScore test bed. "
+        "Required for the full-alignment measure in §7.7(c). Expect to lose most "
+        "of a file: the segmentation column is canonical rather than surface, and "
+        "only rows whose morphemes spell their own inflected form can be scored "
+        "as character offsets (24.20% of English, 30.41% of Mongolian).",
+        recipe="The *inflectional* TSV for each language from the MorphyNet "
+        "GitHub repository, pinned by commit — the derivational file names one "
+        "affix per source/target pair rather than a segmentation and is refused. "
+        "Upstream names are irregular (por/pt.inflectional.v1.tsv, "
+        "hun/hu.inflectional.segmentation.v1.tsv, spa split across two parts), so "
+        "copy each to <root>/morphynet/<commit>/train/<lang>.txt, concatenating "
+        "the parts where upstream split them.",
     ),
     "strr_wordlists": CorpusSpec(
         id="strr_wordlists",

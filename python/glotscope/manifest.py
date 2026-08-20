@@ -32,6 +32,7 @@ from glotscope.enums import (
 
 __all__ = [
     "SCHEMA_VERSION",
+    "UNKNOWN_LICENSE",
     "CorpusManifest",
     "EnvironmentManifest",
     "Manifest",
@@ -43,7 +44,15 @@ __all__ = [
     "environment",
 ]
 
-SCHEMA_VERSION = "1.2"
+UNKNOWN_LICENSE = "UNKNOWN"
+"""Recorded where no SPDX identifier is knowable from the artifact itself.
+
+A local ``tokenizer.json`` or ``safetensors`` file carries no license metadata
+and the repository it was exported from is not recoverable from the bytes.
+``--license-filter=commercial`` reads these fields, so an unverifiable guess here
+would be worse than an explicit unknown."""
+
+SCHEMA_VERSION = "1.3"
 """Bumped whenever any serialized key or enum value changes.
 
 1.2 added ``p_continued`` to the per-language block: §7.1 defines it beside
@@ -99,6 +108,21 @@ class TokenizerManifest:
             "license_spdx": self.license_spdx,
         }
 
+    @classmethod
+    def from_dict(cls, block: Mapping[str, Any]) -> TokenizerManifest:
+        return cls(
+            id=block["id"],
+            revision=block["revision"],
+            tokenizer_json_sha256=block["tokenizer_json_sha256"],
+            vocab_size_tokenizer=block["vocab_size_tokenizer"],
+            vocab_size_config=block["vocab_size_config"],
+            embedding_rows=block["embedding_rows"],
+            algorithm=Algorithm(block["algorithm"]),
+            source=block["source"],
+            source_is_mirror=block["source_is_mirror"],
+            license_spdx=block["license_spdx"],
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class WeightsManifest:
@@ -123,6 +147,15 @@ class WeightsManifest:
             "tied_embeddings": self.tied_embeddings,
             "license_spdx": self.license_spdx,
         }
+
+    @classmethod
+    def from_dict(cls, block: Mapping[str, Any]) -> WeightsManifest:
+        return cls(
+            shard_sha256=block["shard_sha256"],
+            dtype=block["dtype"],
+            tied_embeddings=block["tied_embeddings"],
+            license_spdx=block["license_spdx"],
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +183,18 @@ class CorpusManifest:
             "capabilities": sorted(c.value for c in self.capabilities),
             "license": self.license,
         }
+
+    @classmethod
+    def from_dict(cls, block: Mapping[str, Any]) -> CorpusManifest:
+        return cls(
+            id=block["id"],
+            version=block["version"],
+            split=block["split"],
+            languages=tuple(block["languages"]),
+            sha256=block["sha256"],
+            capabilities=frozenset(Capability(c) for c in block["capabilities"]),
+            license=block["license"],
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,6 +245,30 @@ class ParameterManifest:
             out["candidates_post_exclusion"] = self.candidates_post_exclusion
         return out
 
+    @classmethod
+    def from_dict(cls, block: Mapping[str, Any]) -> ParameterManifest:
+        """Invert :meth:`to_dict`, where an absent key means the parameter is unset.
+
+        ``to_dict`` omits whole groups rather than writing nulls — a document
+        that never ran Tier 2 has no ``top_pct`` key at all — so absence and
+        ``None`` are the same statement and ``get`` is the correct reader.
+        """
+        normalizer = block.get("renyi_normalizer")
+        return cls(
+            leading_space=block["leading_space"],
+            normalization=Normalization(block["normalization"]),
+            add_special_tokens=block["add_special_tokens"],
+            unk_exclusion_threshold=block["unk_exclusion_threshold"],
+            segmenter=Segmenter(block["segmenter"]) if block.get("segmenter") else None,
+            segmenter_model_version=block.get("segmenter_model_version"),
+            renyi_alpha=block.get("renyi_alpha"),
+            renyi_normalizer=RenyiNormalizer(normalizer) if normalizer else None,
+            top_pct=block.get("top_pct"),
+            candidates_pre_exclusion=block.get("candidates_pre_exclusion"),
+            candidates_post_exclusion=block.get("candidates_post_exclusion"),
+            first_pc_removed=block["first_pc_removed"],
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class EnvironmentManifest:
@@ -221,6 +290,14 @@ class EnvironmentManifest:
             "tokenizers": self.tokenizers,
             "platform": self.platform,
         }
+
+    @classmethod
+    def from_dict(cls, block: Mapping[str, Any]) -> EnvironmentManifest:
+        return cls(
+            python=block["python"],
+            tokenizers=block["tokenizers"],
+            platform=block["platform"],
+        )
 
 
 def environment() -> EnvironmentManifest:
@@ -267,6 +344,35 @@ class Manifest:
             "backend": self.backend.value,
             "manifest": inner,
         }
+
+    @classmethod
+    def from_dict(cls, document: Mapping[str, Any]) -> Manifest:
+        """Rebuild a manifest from a §9 document.
+
+        The manifest block is the *lossless* half of the document: every field
+        here round-trips. The tier blocks do not — §9 publishes
+        ``unreachable_count`` and not the ids behind it — which is why loading a
+        document yields :class:`~glotscope.document.LoadedResult` rather than a
+        :class:`~glotscope.report.Report`.
+
+        ``schema_version`` is read from the document rather than stamped with
+        :data:`SCHEMA_VERSION`. Re-emitting a document under a newer schema
+        version than it was written with would silently relabel someone else's
+        published result.
+        """
+        inner = document["manifest"]
+        weights = inner.get("weights")
+        corpus = inner.get("corpus")
+        return cls(
+            tokenizer=TokenizerManifest.from_dict(inner["tokenizer"]),
+            parameters=ParameterManifest.from_dict(inner["parameters"]),
+            environment=EnvironmentManifest.from_dict(inner["environment"]),
+            backend=Backend(document["backend"]),
+            glotscope_version=document["glotscope_version"],
+            weights=WeightsManifest.from_dict(weights) if weights is not None else None,
+            corpus=CorpusManifest.from_dict(corpus) if corpus is not None else None,
+            schema_version=document["schema_version"],
+        )
 
 
 def canonical_json(document: Mapping[str, Any]) -> str:

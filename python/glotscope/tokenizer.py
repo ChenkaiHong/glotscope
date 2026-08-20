@@ -11,6 +11,7 @@ import hashlib
 import json
 import unicodedata
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal
@@ -20,16 +21,40 @@ from tokenizers import Tokenizer as BackendTokenizer
 from glotscope.aggregate import DocumentStats, aggregate_documents, aggregate_words
 from glotscope.compression import compression
 from glotscope.corpus import Corpus, LoadedCorpus
-from glotscope.enums import Algorithm, Capability, Normalization, Segmenter
-from glotscope.errors import TokenizerLoadError
+from glotscope.detect import Detection, detect
+from glotscope.enums import (
+    Algorithm,
+    Capability,
+    MorphologicalType,
+    Normalization,
+    Segmenter,
+    TokenClass,
+    TokenizerFamily,
+    TypologicalScope,
+)
+from glotscope.errors import (
+    NoReferenceSetError,
+    TokenizerLoadError,
+    UnsupportedCheckpointError,
+)
 from glotscope.fertility import fertility
-from glotscope.lint import detect_algorithm, lint_backend
-from glotscope.manifest import ParameterManifest, TokenizerManifest
-from glotscope.report import Tier0Report, Tier1Report, Tier2Report
-from glotscope.results import CorpusMetrics, FertilityResult, LanguageMetrics, StrrPair
+from glotscope.lint import detect_algorithm, lint_backend, token_bytes
+from glotscope.manifest import UNKNOWN_LICENSE, ParameterManifest, TokenizerManifest
+from glotscope.morphology import AlignedWord, morphology, pieces_from_offsets
+from glotscope.morphynet import GoldSegmentations, parse_morphynet
+from glotscope.reference_set import resolve_reference_set
+from glotscope.report import Tier0Report, Tier1Report, Tier2Report, TokenCandidate
+from glotscope.results import (
+    CorpusMetrics,
+    FertilityResult,
+    LanguageMetrics,
+    MorphologyResult,
+    StrrPair,
+)
 from glotscope.roundtrip import roundtrip_matches_from_ids
 from glotscope.segmenters import get_segmenter
 from glotscope.strr import strr
+from glotscope.utf8 import classify_utf8_token
 
 if TYPE_CHECKING:
     from glotscope.embeddings import Embeddings
@@ -41,8 +66,6 @@ _LOCAL_REVISION = "local"
 to pin, and inventing one would put an unverifiable string in the field
 ``glotscope verify`` trusts."""
 
-_UNKNOWN_LICENSE = "UNKNOWN"
-
 _NO_REVISION_WARNING = (
     "local tokenizer.json: no upstream revision exists, so revision is recorded "
     "as 'local' and the artifact's identity rests on tokenizer_json_sha256"
@@ -50,6 +73,10 @@ _NO_REVISION_WARNING = (
 _NO_CONFIG_WARNING = (
     "local tokenizer.json: vocab_size_config and embedding_rows are unknown and "
     "recorded as null; load the checkpoint to fill them"
+)
+_VOCAB_CONFIG_ONLY_WARNING = (
+    "local tokenizer.json: vocab_size_config is unknown and recorded as null; "
+    "embedding_rows was filled from the checkpoint this result read"
 )
 _UNKNOWN_ALGORITHM_WARNING = (
     "algorithm could not be identified from tokenizer.json and is recorded as "
@@ -70,6 +97,48 @@ _UNICODE_FORMS: dict[Normalization, Literal["NFC", "NFD", "NFKC", "NFKD"]] = {
     Normalization.NFKC: "NFKC",
     Normalization.NFKD: "NFKD",
 }
+
+
+_BPE_ALGORITHMS = frozenset({Algorithm.BYTE_LEVEL_BPE, Algorithm.BYTE_FALLBACK_BPE})
+"""What §7.9 was validated on. Anything else is warned about rather than refused:
+Land & Bartolo report Unigram-LM as untested, and untested is not inapplicable."""
+
+
+def _candidates(
+    detection: Detection,
+    *,
+    vocab: Mapping[str, int],
+    family: TokenizerFamily,
+) -> tuple[TokenCandidate, ...]:
+    """Turn ranked ids into displayable candidates (PRD §7.9).
+
+    ``token_repr`` decodes with ``errors="replace"`` deliberately. Candidates are
+    frequently partial byte sequences, and a replacement character is the honest
+    rendering of one — raising or dropping the row would hide exactly the tokens
+    §7.9 is looking for. It is for display only; re-encoding it would not
+    reproduce the id.
+
+    ``script`` is ``None`` for now. UAX #24 attribution is what §14.3 regresses
+    on (D14) and is deferred to M4; a guess here would be laundered into the
+    paper's independent variable.
+    """
+    by_id = {token_id: token for token, token_id in vocab.items()}
+    return tuple(
+        TokenCandidate(
+            token_id=token_id,
+            token_repr=token_bytes(by_id[token_id], family).decode("utf-8", errors="replace")
+            if token_id in by_id
+            else "",
+            indicator=detection.indicator,
+            indicator_value=value,
+            rank=rank,
+            token_class=classify_utf8_token(token_bytes(by_id[token_id], family))
+            if token_id in by_id
+            else TokenClass.WELL_FORMED,
+            script=None,
+        )
+        for rank, (token_id, value) in enumerate(detection.ranked, start=1)
+    )
 
 
 def _normalized(text: str, form: Normalization) -> str:
@@ -116,6 +185,70 @@ def _check_segmenter_capability(segmenter: Segmenter | None, corpus: Corpus) -> 
     """
     if segmenter is not None and segmenter.requires_gold_segmentation:
         corpus.require(Capability.WORD_SEGMENTATION, "fertility")
+
+
+def _check_morphology_parameters(
+    corpus: Corpus,
+    *,
+    morphological_types: Mapping[str, MorphologicalType] | None,
+    frequency_weighted: bool | None,
+    include_single_token_words: bool | None,
+) -> bool:
+    """Decide whether this is a morphology run, and refuse the half-states.
+
+    Two refusals, both of which would otherwise publish a manifest that does not
+    describe the run. Passing these against a corpus with no gold records
+    parameters for a measurement nobody made; passing only some of them against a
+    corpus that has gold means §7.7 rule 4's "no default" would be satisfied by a
+    default chosen here.
+
+    Returns:
+        Whether the corpus declares gold morphology and the parameters are
+        complete, i.e. whether the gold path runs.
+
+    Raises:
+        ValueError: naming the parameters that are missing, or the languages with
+            no declared type, or the capability the corpus does not declare.
+    """
+    supplied = {
+        "morphological_types": morphological_types,
+        "frequency_weighted": frequency_weighted,
+        "include_single_token_words": include_single_token_words,
+    }
+    if not corpus.has(Capability.MORPH_GOLD):
+        named = sorted(name for name, value in supplied.items() if value is not None)
+        if named:
+            raise ValueError(
+                f"corpus {corpus.spec.id!r} declares no {Capability.MORPH_GOLD.value}, "
+                f"so {', '.join(named)} would be recorded for a measurement that "
+                f"never ran (§9). Morphological alignment is scored against a gold "
+                f"corpus — analyze one, and gating is on capability rather than on "
+                f"corpus identity (D5)."
+            )
+        return False
+
+    missing = sorted(name for name, value in supplied.items() if value is None)
+    if missing:
+        raise ValueError(
+            f"corpus {corpus.spec.id!r} declares {Capability.MORPH_GOLD.value}, so "
+            f"morphological alignment is scored and {', '.join(missing)} must be "
+            f"given. §7.7 rule 4 makes frequency weighting and one-token-word "
+            f"inclusion recorded parameters with no default: they change tokenizer "
+            f"rankings and the v2 paper explicitly could not choose one, so a "
+            f"default here would publish a ranking under a convention nobody stated."
+        )
+
+    types = morphological_types or {}
+    undeclared = [language for language in corpus.languages if language not in types]
+    if undeclared:
+        raise ValueError(
+            f"no morphological type declared for {', '.join(undeclared)}. Scope is "
+            f"what §7.7 rule 2 decides from it — Semitic root-and-pattern morphology "
+            f"has no linear boundary to score and isolating languages lack "
+            f"affixation — and guessing it would publish a number where the API "
+            f"exists to return OUT_OF_SCOPE."
+        )
+    return True
 
 
 def _unk_token_id(backend: BackendTokenizer, spec: Mapping[str, Any]) -> int | None:
@@ -181,6 +314,7 @@ class Tokenizer:
     _spec: Mapping[str, Any]
     _manifest: TokenizerManifest
     _warnings: tuple[str, ...]
+    _tier0: Tier0Report | None
 
     def __init__(self) -> None:
         raise TypeError(
@@ -207,6 +341,7 @@ class Tokenizer:
         tokenizer._spec = spec
         tokenizer._manifest = manifest
         tokenizer._warnings = warnings
+        tokenizer._tier0 = None
         return tokenizer
 
     # -- construction -------------------------------------------------------
@@ -261,7 +396,7 @@ class Tokenizer:
         path: str | Path,
         *,
         tokenizer_id: str | None = None,
-        license_spdx: str = _UNKNOWN_LICENSE,
+        license_spdx: str = UNKNOWN_LICENSE,
     ) -> Tokenizer:
         """Load a local ``tokenizer.json``.
 
@@ -337,8 +472,41 @@ class Tokenizer:
         """Tier 0: vocabulary introspection (PRD §7.8).
 
         Always available and costs milliseconds. Needs no corpus and no weights.
+
+        Computed once and kept. The vocabulary is fixed when the tokenizer is
+        loaded, so the answer cannot change — while the work is a decode and a
+        re-encode of every entry, which is a 250k-token round trip on a roster
+        model. `detect` calls this to size the embedding read and
+        `detect_undertrained` calls it again, so the uncached version paid that
+        twice for one answer.
         """
-        return lint_backend(self._backend, self._spec)
+        if self._tier0 is None:
+            self._tier0 = lint_backend(self._backend, self._spec)
+        return self._tier0
+
+    def with_weights(self, *, embedding_rows: int) -> tuple[TokenizerManifest, tuple[str, ...]]:
+        """This tokenizer's manifest and warnings once the weights have been read.
+
+        ``embedding_rows`` is ``None`` until a checkpoint is loaded, and §7.9's
+        reference chain reads the gap between it and ``|V|`` — so a Tier 2
+        document that leaves it null hides the very quantity its own link 2 was
+        drawn from, having just read the matrix that answers it.
+
+        The load-time warning saying the value is unknown is *replaced* rather
+        than kept. It was true when ``from_file`` emitted it and is false in a
+        document that went on to read the rows, and a warnings array
+        contradicting the manifest printed beside it is worse than one that
+        says less. ``vocab_size_config`` genuinely stays unknown: a local
+        ``safetensors`` file carries no ``config.json``, and the vocabulary size
+        handed to the reader was the tokenizer's own count rather than a
+        checkpoint's declaration.
+        """
+        manifest = replace(self._manifest, embedding_rows=embedding_rows)
+        warnings = tuple(
+            _VOCAB_CONFIG_ONLY_WARNING if warning is _NO_CONFIG_WARNING else warning
+            for warning in self._warnings
+        )
+        return manifest, warnings
 
     def analyze(
         self,
@@ -349,6 +517,9 @@ class Tokenizer:
         add_special_tokens: bool = False,
         segmenter: Segmenter | None = None,
         segmenter_model_version: str | None = None,
+        morphological_types: Mapping[str, MorphologicalType] | None = None,
+        frequency_weighted: bool | None = None,
+        include_single_token_words: bool | None = None,
     ) -> Tier1Report:
         """Tier 1: corpus-based metrics (PRD §7.1-§7.7, §8.1).
 
@@ -366,10 +537,16 @@ class Tokenizer:
         the compression family are segmenter-free, and §14.3 step 1 runs parity
         over all 229 FLORES+ varieties precisely because it costs nothing.
         Word-level metrics then raise :class:`SegmenterRequiredError` on access
-        rather than silently picking a convention (D6). Passing a segmenter
-        currently raises :class:`NotImplementedError`, because the adapters ship
-        as optional extras that do not exist yet and recording a segmenter that
-        never ran would put a false claim in the manifest.
+        rather than silently picking a convention (D6).
+
+        A corpus declaring :attr:`~glotscope.enums.Capability.MORPH_GOLD` turns
+        this into a **morphology run**: its rows are parsed as MorphyNet
+        inflectional gold, the surface forms become the documents every other
+        metric sees, and §7.7's three measures are scored per language. That is
+        why the gold arrives as a corpus rather than as a second argument — §9
+        carries one corpus block, and it has to pin the bytes the published
+        morphology number came from. CPT and round-trip in such a run therefore
+        describe a word list, which is what was measured.
 
         ``leading_space`` defaults to ``True`` for byte-level BPE per §7.1 rule 5,
         and is recorded either way. It can move STRR by tens of points.
@@ -384,6 +561,16 @@ class Tokenizer:
             corpus: a :class:`~glotscope.corpus.LoadedCorpus`. A bare
                 :class:`~glotscope.corpus.Corpus` is refused: glotscope ships no
                 corpora (D12), so an unloaded one carries no text.
+            morphological_types: the type of each language in the set, which
+                decides typological scope (§7.7 rule 2). Required — and only
+                accepted — when the corpus declares gold morphology.
+            frequency_weighted: whether the gold is a stream of occurrences
+                rather than a list of types. Recorded, not applied.
+            include_single_token_words: whether words the tokenizer emitted whole
+                are scored. Both of these are recorded parameters with **no
+                default** (§7.7 rule 4): they change tokenizer rankings and the
+                v2 paper explicitly could not choose one, so a default here would
+                publish a ranking under a convention nobody stated.
 
         Raises:
             CapabilityError: if ``segmenter`` is
@@ -391,13 +578,24 @@ class Tokenizer:
                 declare gold word segmentation. Applying "UD segmentation" to
                 arbitrary text requires a trained model with its own per-language
                 accuracy and its own version, which is a different operation.
-            NotImplementedError: if any segmenter is requested.
+            CorpusIntegrityError: if a gold corpus does not parse as MorphyNet
+                inflectional rows, or yields no usable segmentation.
             ValueError: if the corpus was never loaded, resolved to no languages,
-                or holds no documents for a language it names.
+                or holds no documents for a language it names; if a gold corpus
+                is analyzed without all three morphology parameters or without a
+                type for one of its languages; or if any of those parameters is
+                passed against a corpus that declares no gold morphology, which
+                would record a measurement nobody made.
         """
         normalization = Normalization(normalization)
         loaded = _require_loaded(corpus)
         _check_segmenter_capability(segmenter, loaded.corpus)
+        morphology_requested = _check_morphology_parameters(
+            loaded.corpus,
+            morphological_types=morphological_types,
+            frequency_weighted=frequency_weighted,
+            include_single_token_words=include_single_token_words,
+        )
         if not loaded.lines:
             raise ValueError(
                 f"corpus {loaded.corpus.spec.id!r} resolved to no languages, so "
@@ -417,6 +615,19 @@ class Tokenizer:
                     f"corpus {loaded.corpus.spec.id!r} holds no documents for "
                     f"{language!r}, and every Tier 1 ratio divides by a corpus total"
                 )
+            gold: GoldSegmentations | None = None
+            if morphology_requested:
+                # Parsed from the *normalized* rows so that the gold morphemes and
+                # the form they are scored against are in one Unicode form. A form
+                # normalized on its way to the tokenizer and gold that was not
+                # would stop spelling the same string, and AlignedWord would refuse
+                # every word in the corpus.
+                gold = parse_morphynet(
+                    (_normalized(row, normalization) for row in documents),
+                    language=language,
+                )
+                warnings.append(gold.warning())
+                documents = tuple(gold.segmentations)
             chunks: list[DocumentStats] = []
             byte_lengths: list[int] = []
             is_blank: list[bool] = []
@@ -479,6 +690,17 @@ class Tokenizer:
                 ),
                 fertility=words,
                 strr=self._strr(loaded.corpus, language, documents, normalization),
+                morphology=self._morphology(
+                    gold,
+                    # Checked by the gate above; repeated here because mypy reads
+                    # the parameters as optional and the alternative is silently
+                    # substituting a default §7.7 rule 4 forbids.
+                    morphological_types=morphological_types or {},
+                    frequency_weighted=bool(frequency_weighted),
+                    include_single_token_words=bool(include_single_token_words),
+                    leading_space=leading_space,
+                    warnings=warnings,
+                ),
                 roundtrip_rate=roundtrip_matches / stats.n_documents,
             )
 
@@ -534,6 +756,81 @@ class Tokenizer:
             lowercased=False,
         )
 
+    def _morphology(
+        self,
+        gold: GoldSegmentations | None,
+        *,
+        morphological_types: Mapping[str, MorphologicalType],
+        frequency_weighted: bool,
+        include_single_token_words: bool,
+        leading_space: bool,
+        warnings: list[str],
+    ) -> MorphologyResult | None:
+        """Score §7.7's three measures against a parsed gold segmentation.
+
+        ``None`` when the corpus carries no gold, which is every corpus but one:
+        morphological alignment is not a metric that can be computed from text.
+
+        An out-of-scope language never reaches the tokenizer. Scope is a property
+        of the language rather than of the batch, so encoding a corpus to be told
+        the measure does not apply to it would be work performed to produce
+        nothing.
+        """
+        if gold is None:
+            return None
+        morphological_type = morphological_types[gold.language]
+        words: list[AlignedWord] = []
+        if TypologicalScope.for_type(morphological_type) is TypologicalScope.IN_SCOPE:
+            words = self._aligned_words(gold, leading_space=leading_space, warnings=warnings)
+        return morphology(
+            words,
+            language=gold.language,
+            morphological_type=morphological_type,
+            frequency_weighted=frequency_weighted,
+            include_single_token_words=include_single_token_words,
+        )
+
+    def _aligned_words(
+        self,
+        gold: GoldSegmentations,
+        *,
+        leading_space: bool,
+        warnings: list[str],
+    ) -> list[AlignedWord]:
+        """Pair each gold segmentation with the tokenizer's, in character offsets.
+
+        Offsets rather than decoded tokens: see
+        :func:`~glotscope.morphology.pieces_from_offsets`. A word whose offsets do
+        not tile it is dropped and counted rather than scored, because the
+        alternative is boundaries measured against a string the tokenizer never
+        saw.
+        """
+        forms = list(gold.segmentations)
+        shift = 1 if leading_space else 0
+        words: list[AlignedWord] = []
+        unalignable = 0
+        for start in range(0, len(forms), _ANALYSIS_BATCH_SIZE):
+            batch = forms[start : start + _ANALYSIS_BATCH_SIZE]
+            encodings = self._backend.encode_batch(
+                [f" {form}" if leading_space else form for form in batch],
+                # Never on a word: a special token would carry offsets of its own
+                # and claim a boundary the tokenizer did not put in the word.
+                add_special_tokens=False,
+            )
+            for form, encoding in zip(batch, encodings, strict=True):
+                pieces = pieces_from_offsets(form, encoding.offsets, shift=shift)
+                if pieces is None:
+                    unalignable += 1
+                    continue
+                words.append(AlignedWord(morphemes=gold.segmentations[form], tokens=pieces))
+        if unalignable:
+            warnings.append(
+                f"{gold.language}: {unalignable} of {len(forms)} gold words dropped "
+                f"because the tokenizer's character offsets do not tile them, so "
+                f"there are no boundaries to compare"
+            )
+        return words
+
     def detect_undertrained(
         self,
         embeddings: Embeddings,
@@ -557,8 +854,87 @@ class Tokenizer:
         more complex alternatives.
 
         Raises:
-            NoReferenceSetError: if the reference-set fallback chain is exhausted.
-            UnsupportedCheckpointError: if the embeddings are quantized or
-                otherwise not in original dtype.
+            NoReferenceSetError: if the reference-set fallback chain is exhausted
+                **and** the embeddings are tied, leaving no indicator that can
+                run. An untied checkpoint degrades to ``L2(E_in)`` with a warning
+                instead, which is what §7.9's table prescribes.
+            UnsupportedCheckpointError: if the embeddings are quantized, or were
+                built for a vocabulary of a different size — row *i* is token *i*
+                or it is nothing.
         """
-        raise NotImplementedError
+        tier0 = self.lint()
+        # The invariant is that row i exists for every token id, not that the
+        # matrix stops where the vocabulary does. Comparing against the config's
+        # declared `vocab_size` instead refused every checkpoint padded above its
+        # tokenizer — Qwen3 reports 151669 against 151936 — which is precisely
+        # the gap §7.9's reference chain reads at link 2. Those extra rows are
+        # the padding rows, so refusing them disabled the fallback they feed.
+        if embeddings.n_rows < tier0.vocab_size:
+            raise UnsupportedCheckpointError(
+                embeddings.checkpoint,
+                f"the embedding matrix has {embeddings.n_rows} rows and this "
+                f"tokenizer has {tier0.vocab_size} tokens, so some token id has "
+                f"no row. Row i of E_in is token i or it is nothing, and ranking "
+                f"across the shortfall would report one model's rows under "
+                f"another model's token ids",
+            )
+
+        vocab: Mapping[str, int] = self._backend.get_vocab(with_added_tokens=True)
+        warnings: list[str] = []
+        if self._manifest.algorithm not in _BPE_ALGORITHMS:
+            warnings.append(
+                f"§7.9 is validated on BPE tokenizers; this one is recorded as "
+                f"{self._manifest.algorithm.value} and Unigram-LM models are "
+                f"untested upstream. The indicators still compute — untested is "
+                f"not the same as inapplicable — but nothing here has been "
+                f"checked against a published result for this family"
+            )
+
+        try:
+            reference = resolve_reference_set(
+                vocab,
+                tier0.family,
+                vocab_size=tier0.vocab_size,
+                n_rows=embeddings.n_rows,
+                checkpoint=embeddings.checkpoint,
+                tied=embeddings.tied,
+            )
+        except NoReferenceSetError:
+            if embeddings.tied:
+                raise
+            reference_ids: tuple[int, ...] | None = None
+        else:
+            reference_ids = reference.token_ids
+            # Which link of the chain supplied t_ref moves every cosine value,
+            # and §9 has no field for it. The warnings array is where a choice
+            # that changes the numbers goes.
+            warnings.append(
+                f"reference set t_ref taken from {reference.source.value} "
+                f"({len(reference.token_ids)} tokens); §7.9's chain is ordered, "
+                f"so a checkpoint with a different spare-token layout resolves "
+                f"to a different set and different values"
+            )
+
+        detection = detect(
+            e_in=embeddings.e_in,
+            e_out=embeddings.e_in if embeddings.e_out is None else embeddings.e_out,
+            tied=embeddings.tied,
+            reference_ids=reference_ids,
+            excluded=tier0.stage1_exclusions(),
+            vocab_size=tier0.vocab_size,
+            top_pct=top_pct,
+            first_pc_removed=remove_first_pc,
+        )
+
+        return Tier2Report(
+            candidates=_candidates(detection, vocab=vocab, family=tier0.family),
+            indicator=detection.indicator,
+            tied=embeddings.tied,
+            top_pct=top_pct,
+            candidates_pre_exclusion=detection.pre_exclusion,
+            candidates_post_exclusion=detection.post_exclusion,
+            confidence=detection.confidence,
+            indicator_agreement=detection.agreement,
+            first_pc_removed=detection.first_pc_removed,
+            warnings=(*warnings, *detection.warnings),
+        )

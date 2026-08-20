@@ -60,6 +60,12 @@ segmenters = [
 tier2 = [
     "safetensors>=0.4",
     "numpy>=1.24,<2.5",
+    # Declared rather than inherited. `tokenizers` pulls huggingface_hub in
+    # transitively today, so `from_checkpoint` would appear to work on a machine
+    # that never asked for it and break on the first resolver that does not —
+    # the failure G1's clean-install promise exists to catch, arriving as a bare
+    # ModuleNotFoundError at Tier 2 rather than at install time.
+    "huggingface_hub>=0.34",
 ]
 # tiktoken encodings are one of the three §8.1 entry points, and the only one
 # that needs a second tokenizer library.
@@ -78,6 +84,7 @@ dev = [
     # split above invisible to CI.
     "safetensors>=0.4",
     "numpy>=1.24,<2.5",
+    "huggingface_hub>=0.34",
     "tiktoken>=0.7",
 ]
 
@@ -95,6 +102,7 @@ packages = ["python/glotscope"]
 include = [
     "python/glotscope/**",
     "tests/**",
+    "scripts/**",
     "docs/build-order.md",
     "docs/divergences.md",
     "docs/m0-source-audit.md",
@@ -104,6 +112,7 @@ include = [
 exclude = ["glotscope-PRD.md", "HISTORY.md"]
 
 [tool.hatch.build.targets.sdist.force-include]
+"data/tier2-reference-validation.json" = "data/tier2-reference-validation.json"
 "data/ud-license-audit.json" = "data/ud-license-audit.json"
 
 # ---------------------------------------------------------------------------
@@ -131,6 +140,20 @@ select = [
 ignore = [
     "E501",  # line length is enforced by the formatter
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# MorphyNet's segmentation column is quoted verbatim in both files, and the
+# Mongolian rows are the load-bearing example: the gold omits a buffer consonant
+# the surface form carries. Cyrillic a/e/p read as confusable with Latin, which
+# is exactly the check RUF001/RUF002 exist for elsewhere -- here the confusable
+# character *is* the datum, and substituting a Latin lookalike would falsify it.
+"python/glotscope/morphynet.py" = ["RUF001", "RUF002"]
+# `Don’t` carries a curly apostrophe against a FORM column holding the straight
+# one, and that mismatch is the whole point of the test -- writing it with an
+# ASCII quote would delete the thing being checked.
+"tests/test_conllu.py" = ["RUF001"]
+"tests/test_morphynet.py" = ["RUF001", "RUF002"]
+"tests/test_morphology_wiring.py" = ["RUF001", "RUF002"]
 
 [tool.mypy]
 python_version = "3.10"

@@ -24,7 +24,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from glotscope.aggregate import DocumentStats
+from glotscope.aggregate import BoundaryCounts, DocumentStats
 from glotscope.enums import (
     Capability,
     Confidence,
@@ -43,6 +43,7 @@ from glotscope.results import (
     CorpusMetrics,
     GiniResult,
     LanguageMetrics,
+    MorphologyResult,
     ParityResult,
     RenyiResult,
 )
@@ -130,6 +131,49 @@ class Tier0Report:
             if self.non_utf8_byte_values is not None
             else None,
         }
+
+
+def _boundary_block(counts: BoundaryCounts) -> dict[str, Any]:
+    """One P/R/F1 measure, with the counts it was micro-aggregated from.
+
+    Precision leads and is not optional (D11). The raw counts ship beside the
+    ratios because they are what makes a published number checkable — and because
+    micro-aggregation across two runs is a sum of counts, never a mean of F1s.
+    """
+    return {
+        "precision": counts.precision,
+        "recall": counts.recall,
+        "f1": counts.f1,
+        "true_positive": counts.true_positive,
+        "false_positive": counts.false_positive,
+        "false_negative": counts.false_negative,
+    }
+
+
+def _morphology_block(result: MorphologyResult) -> dict[str, Any]:
+    """The §9 morphology entry for one language (§7.7).
+
+    ``scope`` is always present and the measures are absent when it is
+    ``out_of_scope``: a reader who sees the key and no numbers is being told the
+    measure does not apply to the language, which is a finding. Emitting zeros
+    there would tabulate beside real measurements as though they were ones.
+    """
+    block: dict[str, Any] = {
+        "morphological_type": result.morphological_type.value,
+        "scope": result.scope.value,
+        # Recorded because §7.7 rule 4 gives them no default: they change
+        # tokenizer rankings, so a number published without them is not
+        # comparable to anything.
+        "frequency_weighted": result.frequency_weighted,
+        "include_single_token_words": result.include_single_token_words,
+    }
+    if result.morphscore_v1 is not None:
+        block["morphscore_v1"] = result.morphscore_v1
+    if result.morphscore_v2 is not None:
+        block["morphscore_v2"] = _boundary_block(result.morphscore_v2)
+    if result.full_alignment is not None:
+        block["full_alignment"] = _boundary_block(result.full_alignment)
+    return block
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,6 +365,8 @@ class Tier1Report:
             if language_metrics.strr is not None:
                 entry["strr_bare"] = language_metrics.strr.bare
                 entry["strr_leading_space"] = language_metrics.strr.leading_space
+            if language_metrics.morphology is not None:
+                entry["morphology"] = _morphology_block(language_metrics.morphology)
             if language_metrics.parity_vs_reference is not None:
                 entry["parity_vs_reference"] = language_metrics.parity_vs_reference
             if language_metrics.roundtrip_rate is not None:
@@ -460,7 +506,9 @@ class Report:
         """
         Path(path).write_text(canonical_json(self.to_dict()) + "\n", encoding="utf-8")
 
-    @classmethod
-    def from_json(cls, path: str | Path) -> Report:
-        """Load a result document, validating ``schema_version``."""
-        raise NotImplementedError
+    # There is deliberately no `from_json`. §9's tier0 block publishes
+    # `unreachable_count` and not the ids behind it, so a document cannot
+    # rebuild the report that wrote it, and a Report reconstructed from one
+    # would answer `stage1_exclusions()` with an empty set that looks entirely
+    # valid. Read documents with `glotscope.document.load_result`, which returns
+    # a type that never had the method.

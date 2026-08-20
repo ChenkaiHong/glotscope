@@ -20,6 +20,7 @@ __all__ = [
     "IncomparableError",
     "LicenseError",
     "NoReferenceSetError",
+    "SchemaVersionError",
     "SegmenterRequiredError",
     "SegmenterScopeError",
     "SegmenterUnavailableError",
@@ -224,6 +225,30 @@ class IncomparableError(GlotscopeError):
             f"These numbers are not on the same scale, and tabling them together "
             f"would be the error this check exists to prevent. Recompute one side "
             f"with matching parameters."
+        )
+
+
+class SchemaVersionError(GlotscopeError):
+    """A result document was written under an incompatible schema (PRD §9).
+
+    Compatibility is by **major** version. Minor bumps only add keys — 1.2 added
+    ``p_continued`` beside fertility — and a reader that refused them could not
+    read the results this project published one release earlier, which would
+    turn every schema bump into a silent republication of the leaderboard. A
+    major bump means an existing key changed meaning, and there is no honest way
+    to read that: the numbers would parse and mean something else.
+    """
+
+    def __init__(self, source: str, found: str, supported: str) -> None:
+        self.source = source
+        self.found = found
+        self.supported = supported
+        super().__init__(
+            f"{source} declares schema_version {found!r}, and this glotscope "
+            f"reads schema {supported}.x. Major versions differ, so a key in "
+            f"that document means something other than what it means here. "
+            f"Read it with a glotscope from its own major line rather than "
+            f"reinterpreting the numbers."
         )
 
 

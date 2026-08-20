@@ -28,7 +28,9 @@ import os
 from importlib.metadata import PackageNotFoundError, version
 
 from glotscope.aggregate import BoundaryCounts, DocumentStats, WordStats
+from glotscope.compare import ComparisonTable, compare
 from glotscope.corpus import Corpus, LoadedCorpus
+from glotscope.document import LoadedResult, load_result
 from glotscope.embeddings import Embeddings
 from glotscope.enums import (
     Algorithm,
@@ -49,11 +51,14 @@ from glotscope.errors import (
     GlotscopeError,
     IncomparableError,
     NoReferenceSetError,
+    SchemaVersionError,
     SegmenterRequiredError,
     TokenizerLoadError,
     UnsupportedCheckpointError,
 )
 from glotscope.manifest import Manifest, environment
+from glotscope.morphology import AlignedWord, morphology
+from glotscope.morphynet import GoldSegmentations, parse_morphynet
 from glotscope.report import Report, Tier0Report, Tier1Report, Tier2Report, TokenCandidate
 from glotscope.results import (
     CompressionResult,
@@ -68,10 +73,12 @@ from glotscope.tokenizer import Tokenizer
 
 __all__ = [
     "Algorithm",
+    "AlignedWord",
     "Backend",
     "BoundaryCounts",
     "Capability",
     "CapabilityError",
+    "ComparisonTable",
     "CompressionResult",
     "Confidence",
     "Corpus",
@@ -80,9 +87,11 @@ __all__ = [
     "FertilityResult",
     "GiniResult",
     "GlotscopeError",
+    "GoldSegmentations",
     "IncomparableError",
     "Indicator",
     "LoadedCorpus",
+    "LoadedResult",
     "Manifest",
     "MorphologicalType",
     "MorphologyResult",
@@ -92,6 +101,7 @@ __all__ = [
     "RenyiNormalizer",
     "RenyiResult",
     "Report",
+    "SchemaVersionError",
     "Segmenter",
     "SegmenterRequiredError",
     "StrrPair",
@@ -108,7 +118,11 @@ __all__ = [
     "WordStats",
     "__version__",
     "backend",
+    "compare",
     "environment",
+    "load_result",
+    "morphology",
+    "parse_morphynet",
 ]
 
 try:
