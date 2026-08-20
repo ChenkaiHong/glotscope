@@ -201,6 +201,62 @@ candidates are now parked behind that same bump — `cost_unit`, §7.9's agreeme
 `lowercased`/`n_words`, all of them the same unpublished-comparability problem. If the schema moves,
 it should move once and clear all three.
 
+## UD multiword tokens are not morpheme boundaries
+
+**Status:** deliberate scope limit, decided on measurement rather than on argument.
+
+§7.7(c) needs gold morpheme boundaries as character offsets, and MorphyNet — the one resource that
+supplies them — ships **no Turkish at all**, while §10.2 keeps Turkish as the canonical MorphScore
+test bed. UD has Turkish. UD also has a construct that looks like the missing gold: the multiword
+token, where one surface token expands into several syntactic words.
+
+```
+3-4	al	_	_	_	_	_	_	_	_
+3	a	a	ADP	_	_	5	case	_	_
+4	el	el	DET	_	_	5	det	_	_
+```
+
+It is not the missing gold. That notation records where a **surface token differs from its syntactic
+words**, which is a different linguistic relation from morpheme structure and coincides with it only
+sometimes. Measured over three treebanks pinned by commit, using the `train` split of each:
+
+| Treebank | Commit | Surface words | MWTs | Share of words | Concatenate to their token |
+|---|---|---|---|---|---|
+| `UD_Turkish-IMST` | `0c93911` | 17,057 | 1,082 | 6.34% | **99.2%** |
+| `UD_Spanish-AnCora` | `20adddb` | 245,148 | 10,129 | 4.13% | **13.6%** |
+| `UD_English-EWT` | `4a4d77f` | 119,713 | 2,614 | 2.18% | 100% |
+
+Two independent objections, and the treebanks fail different ones:
+
+**Spanish fails mechanically.** `del → de + el` spells `deel`, `al → a + el` spells `ael`. Boundaries
+are character offsets, so 86.4% of that treebank's expansions cannot produce offsets at all — the same
+canonical-versus-surface trap MorphyNet sets, arriving through a different door. Nor would they be
+morphology if they did concatenate: `a` and `el` are separate grammatical words that orthography
+fused, not morphemes of one word.
+
+**Turkish fails linguistically, having passed mechanically.** Its expansions do spell their tokens
+(99.2%), so offsets are computable. But they mark **derivational** boundaries on 6.34% of words, where
+§7.7(c) scores the inflectional segmentation MorphyNet annotates. Turkish is agglutinative: close to
+every word has internal morpheme structure, so a gold covering one word in sixteen — selected by a
+different criterion — is a biased sample rather than a test bed. A `full_alignment` computed over it
+would be a real number about the wrong population.
+
+English concatenates perfectly and covers 2.18% of words, all of them clitics.
+
+So `universal_dependencies` declares `word_segmentation` and **not** `morph_gold`. That makes
+`analyze(..., morphological_types=...)` against UD a clean `CapabilityError` at the gate, rather than
+an acceptance that fails later inside the MorphyNet parser with a column-count error naming the wrong
+corpus. Gating is on capability, never on corpus identity (D5), so the capability has to be true.
+
+**Consequence, stated rather than hidden:** Turkish morphology is not measurable from either resource
+today. MorphyNet has no Turkish file; UD has Turkish but not this annotation. `hbs`, `pol` and `rus`
+are in the same position — MorphyNet ships derivational files only for them. That is a coverage gap in
+§10.2's core set, and it is recorded here rather than filled by whichever gold happens to be parseable.
+
+Reversible on evidence: a treebank whose expansions are inflectional, surface-preserving and broadly
+distributed would qualify, per treebank and never for "UD" as a whole. The three columns above are the
+test any candidate has to pass.
+
 ## Zouhar Rényi README values
 
 **Status:** upstream example discrepancy; the documented numbers are not an α=2.5 reproduction gate.

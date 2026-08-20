@@ -88,7 +88,14 @@ def test_universal_dependencies_records_treebanks_not_language_codes() -> None:
     # treebank rather than the language is what gets recorded.
     assert corpus.languages == ("UD_Korean-Kaist", "UD_Korean-GSD")
     assert corpus.has(Capability.WORD_SEGMENTATION)
-    assert corpus.has(Capability.MORPH_GOLD)
+    # Not morph_gold, and measured rather than assumed. UD marks where a surface
+    # token differs from its syntactic words, which is a different relation from
+    # morpheme structure. Spanish AnCora's expansions are contractions that do
+    # not spell their own token (13.6% concatenate, so the rest admit no
+    # character offsets); Turkish IMST's do concatenate but mark derivational
+    # boundaries on 6.34% of words, not the inflectional segmentation §7.7(c)
+    # scores. MorphyNet is the morphology gold.
+    assert not corpus.has(Capability.MORPH_GOLD)
 
 
 def test_loading_reads_the_downloaded_files_and_records_a_digest(tmp_path: Path) -> None:

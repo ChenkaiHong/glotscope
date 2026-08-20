@@ -203,13 +203,21 @@ REGISTRY: dict[str, CorpusSpec] = {
     ),
     "universal_dependencies": CorpusSpec(
         id="universal_dependencies",
-        capabilities=frozenset({Capability.WORD_SEGMENTATION, Capability.MORPH_GOLD}),
+        capabilities=frozenset({Capability.WORD_SEGMENTATION}),
         license="Per-treebank — see data/ud-license-audit.json",
         is_commercial_ok=False,
-        note="The UD 2.18 audit covers all 353 treebanks: 268 are commercial-compatible, "
-        "31 are noncommercial, and 54 require manual review. Record the exact treebank "
-        "because Korean "
-        "treebanks, for example, use different segmentation conventions.",
+        note="Gold word segmentation only — deliberately not morph_gold. UD marks "
+        "where a surface token differs from its syntactic words, which is a "
+        "different relation from morpheme structure and coincides with it only "
+        "sometimes. Measured over pinned treebanks: Spanish AnCora's expansions "
+        "are contractions that do not spell their own surface token (13.6% "
+        "concatenate, so 86.4% admit no character offsets at all), and Turkish "
+        "IMST's do concatenate (99.2%) but mark derivational boundaries on 6.34% "
+        "of words rather than the inflectional segmentation §7.7(c) scores. "
+        "MorphyNet is the morphology gold; see docs/divergences.md. The UD 2.18 "
+        "audit covers all 353 treebanks: 268 are commercial-compatible, 31 are "
+        "noncommercial, and 54 require manual review. Record the exact treebank, "
+        "because Korean treebanks disagree among themselves about what a word is.",
         recipe="UD 2.18 release archive from the LINDAT repository. Check each "
         "treebank against data/ud-license-audit.json before use: 31 are "
         "noncommercial and 54 need manual review.",
