@@ -23,6 +23,17 @@ comparable only at a fixed word list — its key is ``lowercased`` and
 comparing two numbers whose comparability cannot be checked, which is the exact
 failure this module exists to prevent. Publishing those two fields is the
 prerequisite, and that is a schema change.
+
+**Gini is absent for the same reason**, and was offered here until someone
+noticed it had the same shape. :class:`~glotscope.results.GiniResult` keys on
+``languages`` *and* ``cost_unit`` — §7.4's unit is tokens per aligned line, and
+a Gini computed per sentence or per token is a different number wearing the same
+name. §9 publishes ``corpus_level.gini`` as a bare float, so a reader of two
+documents cannot tell whether the units agree, and neither could this module:
+the check ran over the language sets alone and answered "comparable" either way.
+One rule applied twice — where a document cannot prove two numbers are
+comparable, there is no column. Publishing ``cost_unit`` is the prerequisite
+here too.
 """
 
 from __future__ import annotations
@@ -48,7 +59,10 @@ _PER_LANGUAGE_METRICS = (
     "compression_rate",
     "roundtrip_rate",
 )
-_CORPUS_LEVEL_METRICS = ("gini", "renyi_efficiency")
+_CORPUS_LEVEL_METRICS = ("renyi_efficiency",)
+"""Gini is not here — see the module docstring. Removing it from the value path
+too, rather than only from :data:`METRICS`, keeps one source of truth: a name
+that cannot be requested has no business having a branch that reads it."""
 _TIER0_METRICS = (
     "vocab_size",
     "ill_formed_vocab_rate",
@@ -66,8 +80,8 @@ METRICS: tuple[str, ...] = (
 
 _CORPUS_ROW = "corpus"
 """Row label for a metric that has one value per result rather than one per
-language. Gini and Renyi efficiency are properties of the whole evaluated
-language set, and giving them a per-language row would invent structure."""
+language. Renyi efficiency is a property of the whole evaluated
+language set, and giving it a per-language row would invent structure."""
 
 _VOCAB_ROW = "vocab"
 """Row label for a Tier 0 metric, which describes the vocabulary and no corpus."""

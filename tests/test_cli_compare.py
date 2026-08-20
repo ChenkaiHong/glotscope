@@ -82,12 +82,13 @@ def test_csv_format_writes_a_header_row(tmp_path: Path, capsys: pytest.CaptureFi
     left, right = _pair(tmp_path)
 
     # Act
-    exit_code = main(["compare", left, right, "--metric", "gini", "--format", "csv"])
+    exit_code = main(["compare", left, right, "--metric", "renyi_efficiency", "--format", "csv"])
     captured = capsys.readouterr()
 
     # Assert
     assert exit_code == 0, captured.err
-    assert captured.out.splitlines()[0] == "gini,local@49697ba047fd,local@bbbbbbbbbbbb"
+    header = "renyi_efficiency,local@49697ba047fd,local@bbbbbbbbbbbb"
+    assert captured.out.splitlines()[0] == header
 
 
 def test_incomparable_results_exit_one_and_say_why(

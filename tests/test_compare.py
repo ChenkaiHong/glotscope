@@ -146,11 +146,25 @@ def test_a_corpus_level_metric_tables_a_single_row(tmp_path: Path) -> None:
     right = _write(tmp_path / "b.json", _other_tokenizer(_document()))
 
     # Act
-    table = compare([left, right], metric="gini")
+    table = compare([left, right], metric="renyi_efficiency")
 
     # Assert
     assert tuple(table.rows) == ("corpus",)
-    assert table.rows["corpus"] == (0.13636363636363635, 0.13636363636363635)
+
+
+def test_gini_is_not_offered_because_its_unit_is_unpublished(tmp_path: Path) -> None:
+    # The same rule STRR is held to. GiniResult keys on `languages` *and*
+    # `cost_unit`; §9 publishes `corpus_level.gini` as a bare float; a Gini per
+    # sentence is a different number wearing the same name. Tabling two of them
+    # checked the language sets and answered "comparable" either way — the exact
+    # failure this module exists to prevent.
+    # Arrange
+    left = _write(tmp_path / "a.json", _document())
+    right = _write(tmp_path / "b.json", _other_tokenizer(_document()))
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="renyi_efficiency"):
+        compare([left, right], metric="gini")
 
 
 def test_an_unknown_metric_names_the_ones_that_exist(tmp_path: Path) -> None:

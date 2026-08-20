@@ -177,6 +177,30 @@ and its Stage 1 excludes special ids by design; reproducing the upstream asymmet
 publishing under a rule whose own threshold and selection predicates disagree. The differences are
 named here instead, which is what this file is for.
 
+## `compare` offers no gini column
+
+**Status:** deliberate omission, on the same rule STRR is held to; reversible by a schema change.
+
+§7.4's Gini is comparable only at a fixed cost unit — `GiniResult.comparability_key()` returns
+`languages` **and** `cost_unit`, because a Gini computed per aligned line and one computed per
+sentence are different numbers wearing the same name. §9 publishes `corpus_level.gini` as a bare
+float and no unit beside it.
+
+So `compare` could not check the half that matters. Its gini branch keyed on the language sets alone
+and returned "comparable" whether or not the units agreed — an answer that looks like the refusal
+working and is not. The column was offered from the module's first version; it took a review pass to
+notice it had the same shape as the STRR case the same file had already excluded, three paragraphs up
+in its own docstring.
+
+Removed from `METRICS` and from the corpus-level value path both, so no branch reads a name that can
+no longer be requested. `glotscope compare --metric gini` now names the metrics that exist.
+
+The alternative was schema 1.4, publishing `cost_unit` in §9. Kai chose the removal: it ships without
+moving every committed `result.json` or the G4 fixture, and it keeps one rule rather than two. Three
+candidates are now parked behind that same bump — `cost_unit`, §7.9's agreement threshold, and STRR's
+`lowercased`/`n_words`, all of them the same unpublished-comparability problem. If the schema moves,
+it should move once and clear all three.
+
 ## Zouhar Rényi README values
 
 **Status:** upstream example discrepancy; the documented numbers are not an α=2.5 reproduction gate.
