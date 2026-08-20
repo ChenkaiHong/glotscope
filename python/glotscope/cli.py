@@ -227,6 +227,16 @@ def build_parser() -> argparse.ArgumentParser:
             "improvement from it across seven models. Recorded either way."
         ),
     )
+    detect.add_argument(
+        "--weights-revision",
+        default=None,
+        help=(
+            "commit SHA for a Hub checkpoint. §11 pins artifacts by revision, and "
+            "without one the weights come from a mutable `main` while the "
+            "tokenizer beside them is pinned. Rejected beside a local path, where "
+            "it would pin nothing."
+        ),
+    )
     detect.add_argument("--out", default=None, help="write result.json here (default: stdout)")
 
     compare = sub.add_parser(
@@ -272,6 +282,15 @@ def build_parser() -> argparse.ArgumentParser:
             "filesystem paths out of the manifest, so the document records what "
             "the artifact is (a SHA-256) but not where it lives. The hash is "
             "checked against the manifest before anything is recomputed."
+        ),
+    )
+    verify.add_argument(
+        "--weights-revision",
+        default=None,
+        help=(
+            "commit SHA, when --weights names a Hub checkpoint. §9 records the "
+            "weights by hash and not by revision, so re-fetching the artifact a "
+            "result describes needs the pin the original run used."
         ),
     )
     verify.add_argument(
@@ -344,7 +363,7 @@ def _load_tokenizer(source: str, revision: str | None) -> Tokenizer:
     )
 
 
-def _load_embeddings(source: str, *, vocab_size: int) -> Embeddings:
+def _load_embeddings(source: str, *, vocab_size: int, revision: str | None = None) -> Embeddings:
     """Load the weights named on the command line.
 
     A bare name is a Hub identifier and is resolved as one; anything that names
@@ -361,10 +380,16 @@ def _load_embeddings(source: str, *, vocab_size: int) -> Embeddings:
     """
     path = Path(source)
     if path.is_file():
+        if revision is not None:
+            raise ValueError(
+                f"--weights-revision names a commit on the Hub, and {source} is a "
+                f"file on this disk. Recording a revision beside a local path "
+                f"would pin nothing; that file's identity is its shard_sha256."
+            )
         return Embeddings.from_file(path, vocab_size=vocab_size)
     if _looks_like_a_local_path(source):
         raise FileNotFoundError(f"{source}: no such file or directory")
-    return Embeddings.from_checkpoint(source)
+    return Embeddings.from_checkpoint(source, revision=revision)
 
 
 def _emit(document: str, out: str | None) -> None:
@@ -567,11 +592,14 @@ def _detect_report(
         top_pct=top_pct,
         remove_first_pc=remove_first_pc,
     )
+    # The weights have been read, so `embedding_rows` is known and the load-time
+    # warning that called it unknown is no longer true of this document.
+    tokenizer_manifest, warnings = tokenizer.with_weights(embedding_rows=embeddings.n_rows)
     return Report(
         tier0=tier0,
         tier2=tier2,
         manifest=Manifest(
-            tokenizer=tokenizer.manifest,
+            tokenizer=tokenizer_manifest,
             parameters=ParameterManifest(
                 leading_space=False,
                 normalization=Normalization.NONE,
@@ -586,7 +614,7 @@ def _detect_report(
             glotscope_version=__version__,
             weights=embeddings.manifest,
         ),
-        warnings=tokenizer.warnings,
+        warnings=warnings,
     )
 
 
@@ -594,7 +622,9 @@ def _detect(args: argparse.Namespace) -> int:
     """Tier 0 + Tier 2 in one §9 document."""
     tokenizer = _load_tokenizer(args.tokenizer, args.revision)
     tier0 = tokenizer.lint()
-    embeddings = _load_embeddings(args.weights, vocab_size=tier0.vocab_size)
+    embeddings = _load_embeddings(
+        args.weights, vocab_size=tier0.vocab_size, revision=args.weights_revision
+    )
     report = _detect_report(
         tokenizer,
         tier0,
@@ -782,7 +812,9 @@ def _regenerate_detect(
 
     parameters = manifest["parameters"]
     tier0 = tokenizer.lint()
-    embeddings = _load_embeddings(args.weights, vocab_size=tier0.vocab_size)
+    embeddings = _load_embeddings(
+        args.weights, vocab_size=tier0.vocab_size, revision=args.weights_revision
+    )
     # The same rule the tokenizer follows two frames up: identity is checked
     # before anything is recomputed, so the wrong checkpoint fails on what it is
     # rather than by producing different numbers and blaming the result.

@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from glotscope.compare import compare
+from glotscope.compare import ComparisonTable, compare
 from glotscope.document import LoadedResult, load_result
 from glotscope.errors import IncomparableError
 from glotscope.manifest import canonical_json
@@ -223,3 +223,24 @@ def test_comparing_fewer_than_two_results_refuses(tmp_path: Path) -> None:
     # Act / Assert
     with pytest.raises(ValueError, match="two"):
         compare([left], metric="cpt")
+
+
+def test_markdown_keeps_the_precision_the_document_published() -> None:
+    # `%g` renders 6 significant digits, so a published Renyi efficiency lost
+    # its tail and a seven-digit vocabulary size turned into 1.23457e+06 — in
+    # the *default* output format, while --format json and csv emitted the full
+    # value. A tool whose whole premise is citable numbers must not reformat
+    # them silently, and the three formats must agree about what the table says.
+    table = ComparisonTable(
+        metric="renyi_efficiency",
+        columns=("a@0123456789ab", "b@ba9876543210"),
+        rows={"corpus": (0.6374808768618349, None), "vocab": (1234567, 256000)},
+    )
+
+    rendered = table.to_markdown()
+
+    assert "0.6374808768618349" in rendered
+    assert "1234567" in rendered
+    assert "e+06" not in rendered
+    # None stays empty rather than becoming a number.
+    assert "| corpus | 0.6374808768618349 |  |" in rendered

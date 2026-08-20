@@ -108,7 +108,7 @@ class ComparisonTable:
         rule = f"|---|{'---|' * len(self.columns)}"
         lines = [header, rule]
         for row, values in self.rows.items():
-            rendered = " | ".join("" if value is None else f"{value:g}" for value in values)
+            rendered = " | ".join("" if value is None else str(value) for value in values)
             lines.append(f"| {row} | {rendered} |")
         return "\n".join(lines)
 

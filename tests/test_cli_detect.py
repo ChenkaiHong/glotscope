@@ -269,3 +269,83 @@ def test_the_warnings_array_carries_the_reference_set_source(
     # Assert
     warnings = json.loads(capsys.readouterr().out)["warnings"]
     assert any("unused_bytes" in warning for warning in warnings)
+
+
+def test_the_document_records_the_embedding_row_count_it_just_read(tmp_path: Path) -> None:
+    # `embedding_rows` exists so a reader can see the gap between |V| and the
+    # matrix — that gap is reference-chain link 2 (§7.9). `detect` reads the
+    # weights and then published null anyway, carrying a warning saying the
+    # value was unknown. Both statements cannot be true of the same document.
+    # Arrange
+    tokenizer = tmp_path / "tokenizer.json"
+    rows = _tokenizer(tokenizer, byte_values=range(256))
+    weights = _weights(tmp_path / "model.safetensors", rows + 8)
+    result = tmp_path / "result.json"
+
+    # Act
+    assert main(["detect", str(tokenizer), "--weights", str(weights), "--out", str(result)]) == 0
+
+    # Assert
+    document = json.loads(result.read_text(encoding="utf-8"))
+    assert document["manifest"]["tokenizer"]["embedding_rows"] == rows + 8
+    # vocab_size_config stays null: a local safetensors file carries no config,
+    # and the vocab_size passed in was the tokenizer's own count.
+    assert document["manifest"]["tokenizer"]["vocab_size_config"] is None
+    assert not any("embedding_rows are unknown" in w for w in document["warnings"])
+
+
+def test_the_weights_revision_is_forwarded_to_the_hub(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # §11 pins artifacts by commit revision. `_load_embeddings` resolved a bare
+    # name through `from_checkpoint(source)` with no revision at all, so weights
+    # came from a mutable `main` while the tokenizer beside them was pinned.
+    # Arrange
+    from glotscope.embeddings import Embeddings
+
+    tokenizer = tmp_path / "tokenizer.json"
+    rows = _tokenizer(tokenizer, byte_values=range(256))
+    local = _weights(tmp_path / "model.safetensors", rows)
+    seen: dict[str, object] = {}
+
+    def _fake(model_id: str, *, revision: str | None = None) -> Embeddings:
+        seen["model_id"] = model_id
+        seen["revision"] = revision
+        return Embeddings.from_file(local, vocab_size=rows)
+
+    # Patched on the class rather than through `cli`, which re-exports nothing:
+    # both names bind the same object, so the CLI sees the fake either way.
+    monkeypatch.setattr(Embeddings, "from_checkpoint", staticmethod(_fake))
+
+    # Act
+    exit_code = main(
+        [
+            "detect",
+            str(tokenizer),
+            "--weights",
+            "acme/model",
+            "--weights-revision",
+            "9cf48e52b224239de00d483ec8eb84fb8d0f3a3a",
+            "--out",
+            str(tmp_path / "result.json"),
+        ]
+    )
+
+    # Assert
+    assert exit_code == 0
+    assert seen["model_id"] == "acme/model"
+    assert seen["revision"] == "9cf48e52b224239de00d483ec8eb84fb8d0f3a3a"
+
+
+def test_a_revision_on_a_local_weights_path_is_refused(tmp_path: Path) -> None:
+    # A revision names a commit on the Hub. Accepting one beside a filesystem
+    # path would record a pin that pinned nothing.
+    tokenizer = tmp_path / "tokenizer.json"
+    rows = _tokenizer(tokenizer, byte_values=range(256))
+    weights = _weights(tmp_path / "model.safetensors", rows)
+
+    exit_code = main(
+        ["detect", str(tokenizer), "--weights", str(weights), "--weights-revision", "abc123"]
+    )
+
+    assert exit_code == 1

@@ -304,3 +304,15 @@ def test_from_file_refuses_a_missing_path(tmp_path: Path) -> None:
 def test_direct_construction_is_still_refused() -> None:
     with pytest.raises(TypeError, match="provenance"):
         Tokenizer()
+
+
+def test_lint_is_computed_once_per_tokenizer(tmp_path: Path) -> None:
+    # `lint_backend` decodes and re-encodes every entry in the vocabulary, which
+    # is a 250k-token round trip on a real roster model. `detect` calls `lint()`
+    # once to size the embedding read and `detect_undertrained` calls it again,
+    # so an uncached property paid that cost twice for an answer that cannot
+    # change: the vocabulary is fixed once the tokenizer is loaded.
+    _write_byte_level(tmp_path / "tokenizer.json")
+    tokenizer = Tokenizer.from_file(tmp_path / "tokenizer.json")
+
+    assert tokenizer.lint() is tokenizer.lint()

@@ -11,6 +11,7 @@ import hashlib
 import json
 import unicodedata
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal
@@ -72,6 +73,10 @@ _NO_REVISION_WARNING = (
 _NO_CONFIG_WARNING = (
     "local tokenizer.json: vocab_size_config and embedding_rows are unknown and "
     "recorded as null; load the checkpoint to fill them"
+)
+_VOCAB_CONFIG_ONLY_WARNING = (
+    "local tokenizer.json: vocab_size_config is unknown and recorded as null; "
+    "embedding_rows was filled from the checkpoint this result read"
 )
 _UNKNOWN_ALGORITHM_WARNING = (
     "algorithm could not be identified from tokenizer.json and is recorded as "
@@ -309,6 +314,7 @@ class Tokenizer:
     _spec: Mapping[str, Any]
     _manifest: TokenizerManifest
     _warnings: tuple[str, ...]
+    _tier0: Tier0Report | None
 
     def __init__(self) -> None:
         raise TypeError(
@@ -335,6 +341,7 @@ class Tokenizer:
         tokenizer._spec = spec
         tokenizer._manifest = manifest
         tokenizer._warnings = warnings
+        tokenizer._tier0 = None
         return tokenizer
 
     # -- construction -------------------------------------------------------
@@ -465,8 +472,41 @@ class Tokenizer:
         """Tier 0: vocabulary introspection (PRD §7.8).
 
         Always available and costs milliseconds. Needs no corpus and no weights.
+
+        Computed once and kept. The vocabulary is fixed when the tokenizer is
+        loaded, so the answer cannot change — while the work is a decode and a
+        re-encode of every entry, which is a 250k-token round trip on a roster
+        model. `detect` calls this to size the embedding read and
+        `detect_undertrained` calls it again, so the uncached version paid that
+        twice for one answer.
         """
-        return lint_backend(self._backend, self._spec)
+        if self._tier0 is None:
+            self._tier0 = lint_backend(self._backend, self._spec)
+        return self._tier0
+
+    def with_weights(self, *, embedding_rows: int) -> tuple[TokenizerManifest, tuple[str, ...]]:
+        """This tokenizer's manifest and warnings once the weights have been read.
+
+        ``embedding_rows`` is ``None`` until a checkpoint is loaded, and §7.9's
+        reference chain reads the gap between it and ``|V|`` — so a Tier 2
+        document that leaves it null hides the very quantity its own link 2 was
+        drawn from, having just read the matrix that answers it.
+
+        The load-time warning saying the value is unknown is *replaced* rather
+        than kept. It was true when ``from_file`` emitted it and is false in a
+        document that went on to read the rows, and a warnings array
+        contradicting the manifest printed beside it is worse than one that
+        says less. ``vocab_size_config`` genuinely stays unknown: a local
+        ``safetensors`` file carries no ``config.json``, and the vocabulary size
+        handed to the reader was the tokenizer's own count rather than a
+        checkpoint's declaration.
+        """
+        manifest = replace(self._manifest, embedding_rows=embedding_rows)
+        warnings = tuple(
+            _VOCAB_CONFIG_ONLY_WARNING if warning is _NO_CONFIG_WARNING else warning
+            for warning in self._warnings
+        )
+        return manifest, warnings
 
     def analyze(
         self,
