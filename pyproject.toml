@@ -152,6 +152,7 @@ ignore = [
 # one, and that mismatch is the whole point of the test -- writing it with an
 # ASCII quote would delete the thing being checked.
 "tests/test_conllu.py" = ["RUF001"]
+"tests/test_ud_gold_wiring.py" = ["RUF001"]
 "tests/test_morphynet.py" = ["RUF001", "RUF002"]
 "tests/test_morphology_wiring.py" = ["RUF001", "RUF002"]
 
