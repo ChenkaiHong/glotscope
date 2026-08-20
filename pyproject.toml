@@ -148,6 +148,10 @@ ignore = [
 # is exactly the check RUF001/RUF002 exist for elsewhere -- here the confusable
 # character *is* the datum, and substituting a Latin lookalike would falsify it.
 "python/glotscope/morphynet.py" = ["RUF001", "RUF002"]
+# `Don’t` carries a curly apostrophe against a FORM column holding the straight
+# one, and that mismatch is the whole point of the test -- writing it with an
+# ASCII quote would delete the thing being checked.
+"tests/test_conllu.py" = ["RUF001"]
 "tests/test_morphynet.py" = ["RUF001", "RUF002"]
 "tests/test_morphology_wiring.py" = ["RUF001", "RUF002"]
 
