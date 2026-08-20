@@ -20,6 +20,7 @@ from tokenizers import Tokenizer as BackendTokenizer
 
 from glotscope.aggregate import DocumentStats, aggregate_documents, aggregate_words
 from glotscope.compression import compression
+from glotscope.conllu import GoldSentences, parse_conllu
 from glotscope.corpus import Corpus, LoadedCorpus
 from glotscope.detect import Detection, detect
 from glotscope.enums import (
@@ -628,6 +629,26 @@ class Tokenizer:
                 )
                 warnings.append(gold.warning())
                 documents = tuple(gold.segmentations)
+            sentences: GoldSentences | None = None
+            if segmenter is Segmenter.UD_GOLD:
+                # Mutually exclusive with the branch above by capability rather
+                # than by coincidence: morphology needs MORPH_GOLD, UD_GOLD needs
+                # WORD_SEGMENTATION, and no registry entry declares both.
+                #
+                # Parsed from the *normalized* rows for the reason morphology is:
+                # the annotated text is the lookup key, so a document normalized
+                # on its way to the segmenter would stop matching gold that was
+                # not, and every sentence would be refused as un-annotated.
+                sentences = parse_conllu(
+                    (_normalized(row, normalization) for row in documents),
+                    treebank=f"{language} {loaded.corpus.version}",
+                )
+                warnings.append(sentences.warning())
+                # The annotated sentences become the documents, so every other
+                # Tier 1 metric describes what was actually measured: CPT over a
+                # treebank describes annotated sentences, and §9's corpus block
+                # says which treebank they came from.
+                documents = tuple(sentences.by_text)
             chunks: list[DocumentStats] = []
             byte_lengths: list[int] = []
             is_blank: list[bool] = []
@@ -659,7 +680,7 @@ class Tokenizer:
             document_stats[language] = stats
             words: FertilityResult | None = None
             if segmenter is not None:
-                adapter = get_segmenter(segmenter, language=language)
+                adapter = get_segmenter(segmenter, language=language, gold=sentences)
                 segmented = [
                     word
                     for document in documents

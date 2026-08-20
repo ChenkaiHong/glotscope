@@ -342,7 +342,7 @@ class Corpus:
         split: str | None = None,
         sha256: str = "",
     ) -> Corpus:
-        """UD treebanks, which carry both gold segmentation and morphology.
+        """UD treebanks, which carry gold word segmentation.
 
         Takes treebank identifiers rather than language codes: UD Korean
         treebanks disagree among themselves — Kaist segments morphologically, GSD
