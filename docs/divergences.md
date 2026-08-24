@@ -222,9 +222,22 @@ sometimes. Measured over three treebanks pinned by commit, using the `train` spl
 
 | Treebank | Commit | Surface words | MWTs | Share of words | Concatenate to their token |
 |---|---|---|---|---|---|
-| `UD_Turkish-IMST` | `0c93911` | 17,057 | 1,082 | 6.34% | **99.2%** |
-| `UD_Spanish-AnCora` | `20adddb` | 245,148 | 10,129 | 4.13% | **13.6%** |
-| `UD_English-EWT` | `4a4d77f` | 119,713 | 2,614 | 2.18% | 100% |
+| `UD_Turkish-IMST` | `0c93911` | 36,415 | 1,082 | 2.97% | **99.2%** |
+| `UD_Spanish-AnCora` | `20adddb` | 442,892 | 10,129 | 2.29% | **13.6%** |
+| `UD_English-EWT` | `4a4d77f` | 201,963 | 2,614 | 1.29% | 100% |
+
+
+**How these were counted**, because the first attempt got them wrong. Surface words are
+`integer-id rows − rows covered by ranges + range rows`, computed statelessly so no counter can leak
+across a sentence boundary. The first version tracked "skip up to id N" without resetting at the blank
+line between sentences, which silently dropped the opening words of every sentence following one that
+contained a multiword token: Turkish came out at 17,057 surface words against the correct 36,415, and
+the share was overstated at 6.34%. Concatenation is checked per range by joining the covered rows'
+`FORM` fields and comparing to the range row's own `FORM`; those figures were unaffected. Both
+statistics were recomputed by two independent methods that agree exactly.
+
+The direction of the error is worth noting: correcting it *strengthens* the conclusion. Turkish
+multiword tokens cover less of the treebank than first reported, not more.
 
 Two independent objections, and the treebanks fail different ones:
 
@@ -235,13 +248,13 @@ morphology if they did concatenate: `a` and `el` are separate grammatical words 
 fused, not morphemes of one word.
 
 **Turkish fails linguistically, having passed mechanically.** Its expansions do spell their tokens
-(99.2%), so offsets are computable. But they mark **derivational** boundaries on 6.34% of words, where
+(99.2%), so offsets are computable. But they mark **derivational** boundaries on 2.97% of words, where
 §7.7(c) scores the inflectional segmentation MorphyNet annotates. Turkish is agglutinative: close to
 every word has internal morpheme structure, so a gold covering one word in sixteen — selected by a
 different criterion — is a biased sample rather than a test bed. A `full_alignment` computed over it
 would be a real number about the wrong population.
 
-English concatenates perfectly and covers 2.18% of words, all of them clitics.
+English concatenates perfectly and covers 1.29% of words, all of them clitics.
 
 So `universal_dependencies` declares `word_segmentation` and **not** `morph_gold`. That makes
 `analyze(..., morphological_types=...)` against UD a clean `CapabilityError` at the gate, rather than

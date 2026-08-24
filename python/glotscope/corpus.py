@@ -212,7 +212,7 @@ REGISTRY: dict[str, CorpusSpec] = {
         "sometimes. Measured over pinned treebanks: Spanish AnCora's expansions "
         "are contractions that do not spell their own surface token (13.6% "
         "concatenate, so 86.4% admit no character offsets at all), and Turkish "
-        "IMST's do concatenate (99.2%) but mark derivational boundaries on 6.34% "
+        "IMST's do concatenate (99.2%) but mark derivational boundaries on 2.97% "
         "of words rather than the inflectional segmentation §7.7(c) scores. "
         "MorphyNet is the morphology gold; see docs/divergences.md. The UD 2.18 "
         "audit covers all 353 treebanks: 268 are commercial-compatible, 31 are "

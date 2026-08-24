@@ -119,6 +119,25 @@ def test_out_of_scope_languages_carry_no_numbers_at_all(
     assert result.full_alignment is None
 
 
+def test_a_batch_emptied_by_the_filter_is_refused_not_scored_as_zero() -> None:
+    # The empty-batch refusal guards the *input*; `scored` can still be emptied
+    # afterwards, when a vocabulary emits every gold word whole and the caller
+    # excluded one-token words. `_counts` over nothing returns
+    # BoundaryCounts(0, 0, 0), whose precision, recall and F1 all read 0.0 — the
+    # "this tokenizer aligns nothing" claim the refusal exists to prevent,
+    # published where a reader cannot tell it apart from a measurement.
+    whole = AlignedWord(morphemes=("cat", "s"), tokens=("cats",))
+
+    with pytest.raises(ValueError, match="emitted every gold word whole"):
+        morphology(
+            [whole],
+            language="eng_Latn",
+            morphological_type=MorphologicalType.FUSIONAL,
+            frequency_weighted=False,
+            include_single_token_words=False,
+        )
+
+
 def test_a_character_level_tokenizer_earns_perfect_recall_and_poor_precision() -> None:
     # D11's reason for making precision non-optional: recall alone rewards
     # oversegmentation, and this is what that looks like.

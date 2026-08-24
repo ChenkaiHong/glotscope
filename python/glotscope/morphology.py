@@ -250,6 +250,21 @@ def morphology(
         )
 
     scored = [word for word in words if include_single_token_words or not word.is_single_token]
+    if not scored:
+        # The check above guards the *input*; the filter can empty the batch
+        # afterwards, when a vocabulary emits every gold word whole and the
+        # caller excluded one-token words. That is the same fact about the input,
+        # so it earns the same refusal rather than a different outcome. Returning
+        # None for the two count-based measures is not an option: `_accuracy`
+        # independently returns None here, leaving an in-scope result carrying no
+        # measure at all, which `MorphologyResult` rejects with a message about
+        # its own invariant rather than about the cause.
+        raise ValueError(
+            f"{language!r}: this tokenizer emitted every gold word whole and "
+            f"include_single_token_words is False, so no word is left to score. "
+            f"An F1 of 0.0 over an empty batch reads as a finding about the "
+            f"tokenizer when it is a fact about the input."
+        )
     predicted = [sorted(word.predicted_boundaries) for word in scored]
     # The check above guards the *input*; `scored` can still be empty after the
     # filter, when a vocabulary emits every gold form whole and the caller asked
@@ -264,12 +279,8 @@ def morphology(
         morphological_type=morphological_type,
         scope=scope,
         morphscore_v1=_accuracy(words),
-        morphscore_v2=(
-            _counts(predicted, [sorted(w.stem_suffix_boundary) for w in scored]) if scored else None
-        ),
-        full_alignment=(
-            _counts(predicted, [sorted(w.gold_boundaries) for w in scored]) if scored else None
-        ),
+        morphscore_v2=_counts(predicted, [sorted(w.stem_suffix_boundary) for w in scored]),
+        full_alignment=_counts(predicted, [sorted(w.gold_boundaries) for w in scored]),
         frequency_weighted=frequency_weighted,
         include_single_token_words=include_single_token_words,
     )
