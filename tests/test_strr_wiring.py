@@ -65,8 +65,8 @@ def test_a_wordlist_corpus_produces_both_strr_conventions(tmp_path: Path) -> Non
     assert strr is not None
     # Both, never one: the conventions disagree and §7.6 refuses to publish a
     # single unqualified number.
-    assert 0.0 <= strr.bare <= 1.0
-    assert 0.0 <= strr.leading_space <= 1.0
+    assert 0.0 <= strr.bare <= 100.0
+    assert 0.0 <= strr.leading_space <= 100.0
     assert strr.n_words == len(_WORDS)
 
 

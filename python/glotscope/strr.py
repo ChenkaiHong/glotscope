@@ -62,8 +62,22 @@ def strr(
 
     return StrrPair(
         language=language,
-        bare=bare.n_single_token / bare.n_words,
-        leading_space=leading_space.n_single_token / leading_space.n_words,
+        bare=_percent(bare.n_single_token, bare.n_words),
+        leading_space=_percent(leading_space.n_single_token, leading_space.n_words),
         lowercased=lowercased,
         n_words=bare.n_words,
     )
+
+
+def _percent(retained: int, total: int) -> float:
+    """§7.6 multiplies by 100. A percentage, not a fraction.
+
+    The scale is part of the formula rather than presentation, and it disagreed
+    with itself: this returned a fraction while
+    :meth:`~glotscope.report.Tier1Report.to_dict` published the number unchanged
+    and every docstring described the two conventions as differing "by tens of
+    points". The same §9 field could therefore carry 0.42 or 42.0 depending on
+    which code path built the pair, and a reader comparing against the source
+    paper's table would be two orders of magnitude out with nothing to say so.
+    """
+    return retained / total * 100.0
