@@ -112,6 +112,43 @@ def test_a_differing_renyi_alpha_refuses_a_renyi_comparison(tmp_path: Path) -> N
     assert excinfo.value.field == "alpha"
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("sha256", "f" * 64), ("version", "9.9"), ("id", "fineweb2")],
+)
+def test_a_differing_corpus_refuses_whichever_field_differs(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    # Found by mutation: forcing `_shared_key`'s corpus entry to None broke no
+    # test, so nothing checked that two results over *different text* are
+    # refused — the most basic thing `compare` exists to refuse. The behaviour
+    # was already correct; only the check was missing.
+    left = _write(tmp_path / "a.json", _document())
+    other = _other_tokenizer(_document())
+    other["manifest"]["corpus"][field] = value
+    right = _write(tmp_path / "b.json", other)
+
+    with pytest.raises(IncomparableError) as excinfo:
+        compare([left, right], metric="cpt")
+    assert excinfo.value.field == "corpus"
+
+
+def test_the_csv_body_carries_the_values_not_only_the_header(tmp_path: Path) -> None:
+    # Also from mutation: blanking every CSV cell broke nothing, because only the
+    # header row was ever asserted. A renderer whose body goes unchecked is one
+    # that can silently emit empty columns.
+    left = _write(tmp_path / "a.json", _document())
+    right = _write(tmp_path / "b.json", _other_tokenizer(_document()))
+
+    rows = compare([left, right], metric="cpt").to_csv().splitlines()
+
+    body = [line for line in rows[1:] if line]
+    assert body, "the table has no data rows"
+    for line in body:
+        cells = line.split(",")[1:]
+        assert all(cell != "" for cell in cells), line
+
+
 def test_differing_language_sets_refuse(tmp_path: Path) -> None:
     # Arrange
     left = _write(tmp_path / "a.json", _document())

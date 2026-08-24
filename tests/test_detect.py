@@ -48,6 +48,41 @@ def test_cosine_distance_is_zero_along_the_reference_direction() -> None:
     assert distances[2] == pytest.approx(1.0, abs=1e-12)
 
 
+def test_removing_the_first_principal_component_changes_the_values() -> None:
+    # Found by mutation: forcing `first_pc_removed` off inside `detect` broke no
+    # test. The flag was asserted as *recorded* and never as *effective*, so D9's
+    # switch could have been inert and every test would still have passed.
+    #
+    # Rows share a dominant direction with a smaller orthogonal component;
+    # projecting the dominant one out leaves the orthogonal part, so the ranking
+    # is computed over different numbers.
+    e_in = np.array([[3.0, 0.1], [3.0, 0.9], [3.0, 0.5], [0.0, 0.0]])
+    e_out = np.array([[1.0, 0.2], [1.0, 0.8], [1.0, 0.4], [1.0, 0.0]])
+
+    plain = detect(
+        e_in=e_in,
+        e_out=e_out,
+        tied=False,
+        reference_ids=(3,),
+        excluded=frozenset(),
+        vocab_size=3,
+        top_pct=100.0,
+    )
+    removed = detect(
+        e_in=e_in,
+        e_out=e_out,
+        tied=False,
+        reference_ids=(3,),
+        excluded=frozenset(),
+        vocab_size=3,
+        top_pct=100.0,
+        first_pc_removed=True,
+    )
+
+    assert removed.first_pc_removed is True
+    assert [value for _, value in plain.ranked] != [value for _, value in removed.ranked]
+
+
 def test_a_zero_reference_mean_is_refused_on_a_tied_checkpoint() -> None:
     # Chain link 2 is padding rows and padding rows are usually exactly zero, so
     # u_ref = 0 is the ordinary case rather than a contrived one. Every cosine is
@@ -387,3 +422,35 @@ def test_a_tied_checkpoint_cannot_run_without_a_reference_set() -> None:
             vocab_size=2,
             top_pct=100.0,
         )
+
+
+def test_first_pc_removal_also_reaches_the_tied_cosine_indicator() -> None:
+    # The untied test above exercises E_in only, so the E_out projection stayed
+    # unkilled by mutation. Tied is the common shape — two of the three reference
+    # checkpoints tie — and there the cosine against u_ref is the *whole*
+    # indicator, so an inert projection would silently do nothing on most models.
+    # Three columns: centring plus PC1 removal on two columns leaves the zero
+    # matrix, which detect refuses outright — the guard added earlier today.
+    e_out = np.array([[3.0, 0.1, 0.2], [3.0, 0.9, 0.1], [3.0, 0.5, 0.9], [3.0, 0.0, 0.5]])
+
+    plain = detect(
+        e_in=e_out,
+        e_out=e_out,
+        tied=True,
+        reference_ids=(3,),
+        excluded=frozenset(),
+        vocab_size=3,
+        top_pct=100.0,
+    )
+    removed = detect(
+        e_in=e_out,
+        e_out=e_out,
+        tied=True,
+        reference_ids=(3,),
+        excluded=frozenset(),
+        vocab_size=3,
+        top_pct=100.0,
+        first_pc_removed=True,
+    )
+
+    assert [value for _, value in plain.ranked] != [value for _, value in removed.ranked]

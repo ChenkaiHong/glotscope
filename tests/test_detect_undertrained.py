@@ -126,6 +126,27 @@ def test_candidates_are_ranked_from_one_and_carry_their_utf8_class(tmp_path: Pat
     assert all(candidate.token_class in set(TokenClass) for candidate in report.candidates)
 
 
+def test_candidate_repr_and_class_come_from_the_vocabulary(tmp_path: Path) -> None:
+    # The assertion above is true of every enum member, and mutation showed that
+    # forcing every class to WELL_FORMED and every repr to "" broke nothing. Both
+    # fields are what let a reader tell an under-trained word piece from a stray
+    # byte, so both are checked against the vocabulary that produced them.
+    # top_pct=100 puts the whole post-exclusion domain in the set, so specific
+    # ids can be named rather than guessed at from a ranking.
+    tokenizer = _byte_level(tmp_path / "tokenizer.json", byte_values=range(256))
+
+    report = tokenizer.detect_undertrained(_embeddings(tokenizer), top_pct=100.0)
+
+    by_id = {candidate.token_id: candidate for candidate in report.candidates}
+    assert by_id[ord("A")].token_repr == "A"
+    assert by_id[ord("z")].token_repr == "z"
+    # Every candidate is WELL_FORMED here by construction, because Stage 1 drops
+    # partial UTF-8 before ranking — so the class field cannot be distinguished
+    # from its default on a byte-level vocabulary. `token_repr` is what this test
+    # can hold, and it is the field a reader actually reads.
+    assert by_id[ord("A")].token_class is TokenClass.WELL_FORMED
+
+
 def test_the_reference_set_source_is_named_in_the_warnings(tmp_path: Path) -> None:
     # Which link of the chain supplied t_ref changes the numbers, and §9 has no
     # field for it. The warnings array is where a contested choice goes.
