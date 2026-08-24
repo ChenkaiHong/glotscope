@@ -365,6 +365,10 @@ class Tier1Report:
             if language_metrics.strr is not None:
                 entry["strr_bare"] = language_metrics.strr.bare
                 entry["strr_leading_space"] = language_metrics.strr.leading_space
+                # §7.6 is comparable only at a fixed word list and casing. Both
+                # were computed and dropped, which is why `compare` excluded STRR.
+                entry["strr_lowercased"] = language_metrics.strr.lowercased
+                entry["strr_n_words"] = language_metrics.strr.n_words
             if language_metrics.morphology is not None:
                 entry["morphology"] = _morphology_block(language_metrics.morphology)
             if language_metrics.parity_vs_reference is not None:
@@ -376,6 +380,11 @@ class Tier1Report:
         corpus_level: dict[str, Any] = {}
         if self.corpus_level.gini is not None:
             corpus_level["gini"] = self.corpus_level.gini.value
+            # §7.4 is comparable only at a fixed cost unit — a Gini per sentence
+            # is a different number under the same name — so publishing the value
+            # without it made the comparison uncheckable and cost the metric its
+            # column in `compare`.
+            corpus_level["gini_cost_unit"] = self.corpus_level.gini.cost_unit
         if self.corpus_level.renyi is not None:
             corpus_level["renyi_efficiency"] = self.corpus_level.renyi.value
             corpus_level["renyi_alpha"] = self.corpus_level.renyi.alpha

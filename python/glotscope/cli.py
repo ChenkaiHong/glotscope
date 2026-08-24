@@ -39,6 +39,7 @@ from glotscope import __version__, backend
 from glotscope.compare import METRICS
 from glotscope.compare import compare as compare_results
 from glotscope.corpus import REGISTRY, Corpus, LoadedCorpus
+from glotscope.detect import AGREEMENT_THRESHOLD
 from glotscope.document import load_result
 from glotscope.embeddings import Embeddings
 from glotscope.enums import MorphologicalType, Normalization, RenyiNormalizer, Segmenter
@@ -605,6 +606,11 @@ def _detect_report(
                 normalization=Normalization.NONE,
                 add_special_tokens=False,
                 top_pct=top_pct,
+                # §7.9 requires LOW_CONFIDENCE "when they disagree beyond
+                # threshold" and fixes no value, so the verdict is unreadable
+                # without the line it was measured against: a HIGH from a run at
+                # 0.7 says something different from a HIGH at 0.3.
+                agreement_threshold=AGREEMENT_THRESHOLD,
                 candidates_pre_exclusion=tier2.candidates_pre_exclusion,
                 candidates_post_exclusion=tier2.candidates_post_exclusion,
                 first_pc_removed=tier2.first_pc_removed,

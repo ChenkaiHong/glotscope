@@ -52,12 +52,32 @@ and the repository it was exported from is not recoverable from the bytes.
 ``--license-filter=commercial`` reads these fields, so an unverifiable guess here
 would be worse than an explicit unknown."""
 
-SCHEMA_VERSION = "1.3"
+SCHEMA_VERSION = "1.4"
 """Bumped whenever any serialized key or enum value changes.
 
 1.2 added ``p_continued`` to the per-language block: §7.1 defines it beside
 fertility and the two answer different questions, so computing it and
-publishing only the other left a defined quantity unreadable."""
+publishing only the other left a defined quantity unreadable.
+
+1.3 added the per-language ``morphology`` block, carrying §7.7's three measures
+with the two recorded parameters that have no default.
+
+1.4 published four values that were computed and then dropped, each of which a
+reader needs to know whether two numbers may be compared at all:
+
+* ``gini_cost_unit`` — §7.4's Gini is comparable only at a fixed cost unit, and
+  the document published a bare float. ``compare`` had to exclude the metric.
+* ``strr_lowercased`` and ``strr_n_words`` — §7.6's STRR is comparable only at a
+  fixed word list and casing, and neither was published. Same exclusion.
+* ``segmenter_model_versions`` — per language, replacing a scalar that was
+  filled only from the caller's argument and so was ``None`` exactly when the
+  adapter knew the answer.
+* ``agreement_threshold`` — §7.9 fixes no value for it, so a ``HIGH`` confidence
+  verdict was unreadable without it.
+
+The through-line is one rule: a parameter that decides comparability has to be
+in the document, or the comparison cannot be checked and must be refused. Three
+metrics were being refused for want of four fields."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,6 +217,19 @@ class CorpusManifest:
         )
 
 
+def _versions(block: Any) -> Mapping[str, str] | None:
+    """Read ``segmenter_model_versions`` back, tolerating its absence.
+
+    A 1.3 document has no such key and a 1.4 one may carry ``null`` where the
+    adapter pins nothing — ``WHITESPACE`` applies no model. Both read as ``None``,
+    which is the honest answer and the one `compare` refuses on rather than
+    treating two unknowns as equal.
+    """
+    if not isinstance(block, Mapping):
+        return None
+    return {str(language): str(value) for language, value in block.items()}
+
+
 @dataclass(frozen=True, slots=True)
 class ParameterManifest:
     """Every contested parameter choice, recorded (PRD §9, §7).
@@ -211,7 +244,24 @@ class ParameterManifest:
     add_special_tokens: bool
     unk_exclusion_threshold: float = 0.10
     segmenter: Segmenter | None = None
-    segmenter_model_version: str | None = None
+    segmenter_model_versions: Mapping[str, str] | None = None
+    """What produced the boundaries, **per language**.
+
+    A mapping rather than one string because a run can span several versions and
+    a single field would have to drop all but one: ``UD_GOLD`` records the
+    treebank, and a run over two treebanks has two. It was previously a scalar
+    filled only from the caller's argument and never from the adapter — so it was
+    ``None`` in exactly the case where the value was known, while
+    :mod:`glotscope.compare` used it in the fertility comparability key. Two runs
+    under different UniDic versions therefore both recorded ``None`` and compared
+    as comparable, which is the silent incomparability D6 exists to prevent."""
+
+    agreement_threshold: float | None = None
+    """§7.9's Spearman line below which the two Tier 2 indicators are reported as
+    disagreeing. §7.9 requires ``LOW_CONFIDENCE`` "when they disagree beyond
+    threshold" and fixes no value, which makes it a contested parameter: a
+    ``HIGH`` verdict says nothing without the number it was measured against."""
+
     renyi_alpha: float | None = None
     renyi_normalizer: RenyiNormalizer | None = None
     top_pct: float | None = None
@@ -235,7 +285,16 @@ class ParameterManifest:
         }
         if self.segmenter is not None:
             out["segmenter"] = self.segmenter.value
-            out["segmenter_model_version"] = self.segmenter_model_version
+            out["segmenter_model_versions"] = (
+                None
+                if self.segmenter_model_versions is None
+                else dict(sorted(self.segmenter_model_versions.items()))
+            )
+        if self.agreement_threshold is not None:
+            # Its own key rather than part of the Tier 2 group: §7.9 fixes no
+            # value for it, so a HIGH confidence verdict is unreadable without
+            # the line it was measured against, whatever else the run recorded.
+            out["agreement_threshold"] = self.agreement_threshold
         if self.renyi_alpha is not None:
             out["renyi_alpha"] = self.renyi_alpha
             out["renyi_normalizer"] = self.renyi_normalizer.value if self.renyi_normalizer else None
@@ -260,7 +319,8 @@ class ParameterManifest:
             add_special_tokens=block["add_special_tokens"],
             unk_exclusion_threshold=block["unk_exclusion_threshold"],
             segmenter=Segmenter(block["segmenter"]) if block.get("segmenter") else None,
-            segmenter_model_version=block.get("segmenter_model_version"),
+            segmenter_model_versions=_versions(block.get("segmenter_model_versions")),
+            agreement_threshold=block.get("agreement_threshold"),
             renyi_alpha=block.get("renyi_alpha"),
             renyi_normalizer=RenyiNormalizer(normalizer) if normalizer else None,
             top_pct=block.get("top_pct"),

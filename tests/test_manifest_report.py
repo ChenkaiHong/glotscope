@@ -67,7 +67,8 @@ def _manifest(*, with_optional_tiers: bool = False) -> Manifest:
         normalization=Normalization.NFC,
         add_special_tokens=False,
         segmenter=Segmenter.STANZA,
-        segmenter_model_version="1.10.1",
+        segmenter_model_versions={"jpn_Jpan": "1.10.1"},
+        agreement_threshold=0.7,
         renyi_alpha=2.5,
         renyi_normalizer=RenyiNormalizer.NOMINAL,
         top_pct=2.0,
@@ -130,7 +131,7 @@ def test_manifest_serializes_optional_tiers_and_contested_parameters() -> None:
     # Pinned as a literal on purpose: a serialized key changing without the
     # version moving is the failure this assertion exists to make impossible.
     # 1.2 added p_continued to the per-language block; 1.3 added morphology.
-    assert document["schema_version"] == "1.3"
+    assert document["schema_version"] == "1.4"
     assert document["backend"] == "python"
     assert document["manifest"]["tokenizer"] == {
         "id": "acme/tokenizer",
@@ -153,7 +154,8 @@ def test_manifest_serializes_optional_tiers_and_contested_parameters() -> None:
         "unk_exclusion_threshold": 0.1,
         "first_pc_removed": True,
         "segmenter": "stanza",
-        "segmenter_model_version": "1.10.1",
+        "segmenter_model_versions": {"jpn_Jpan": "1.10.1"},
+        "agreement_threshold": 0.7,
         "renyi_alpha": 2.5,
         "renyi_normalizer": "nominal",
         "top_pct": 2.0,
@@ -174,7 +176,8 @@ def test_manifest_omits_absent_tiers_and_optional_parameters() -> None:
         "unk_exclusion_threshold",
         "first_pc_removed",
         "segmenter",
-        "segmenter_model_version",
+        "segmenter_model_versions",
+        "agreement_threshold",
         "renyi_alpha",
         "renyi_normalizer",
         "top_pct",
