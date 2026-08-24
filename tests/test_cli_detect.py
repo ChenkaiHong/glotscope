@@ -349,3 +349,20 @@ def test_a_revision_on_a_local_weights_path_is_refused(tmp_path: Path) -> None:
     )
 
     assert exit_code == 1
+
+
+def test_the_agreement_threshold_is_published_beside_the_confidence(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # §7.9 requires LOW_CONFIDENCE "when they disagree beyond threshold" and
+    # fixes no value, so the verdict is unreadable without the line it was
+    # measured against: HIGH at 0.7 says something different from HIGH at 0.3.
+    tokenizer = tmp_path / "tokenizer.json"
+    rows = _tokenizer(tokenizer, byte_values=range(256))
+    weights = _weights(tmp_path / "model.safetensors", rows)
+
+    assert main(["detect", str(tokenizer), "--weights", str(weights)]) == 0
+
+    document = json.loads(capsys.readouterr().out)
+    assert document["manifest"]["parameters"]["agreement_threshold"] == 0.7
+    assert document["tier2"]["confidence"] in {"HIGH", "LOW_CONFIDENCE"}

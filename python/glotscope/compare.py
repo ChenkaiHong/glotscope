@@ -17,23 +17,20 @@ plus three things those classes leave out because they cannot vary inside a
 single process and can vary between two published documents: the corpus
 identity, the Unicode normalization form, and whether special tokens were added.
 
-**STRR is deliberately absent.** :class:`~glotscope.results.StrrPair` is
-comparable only at a fixed word list — its key is ``lowercased`` and
-``n_words`` — and §9 publishes neither. Offering an STRR column here would mean
-comparing two numbers whose comparability cannot be checked, which is the exact
-failure this module exists to prevent. Publishing those two fields is the
-prerequisite, and that is a schema change.
+**STRR and Gini were absent until schema 1.4, and the reason is the rule.**
+:class:`~glotscope.results.StrrPair` is comparable only at a fixed word list and
+casing; :class:`~glotscope.results.GiniResult` only at a fixed cost unit — a Gini
+per sentence is a different number wearing the same name. §9 published neither
+``lowercased``/``n_words`` nor ``cost_unit``, so a reader of two documents could
+not tell whether they agreed and neither could this module: the checks ran over
+the language sets alone and answered "comparable" either way, which is precisely
+the failure the module exists to prevent. Both columns were withdrawn rather than
+offered on an unverifiable basis.
 
-**Gini is absent for the same reason**, and was offered here until someone
-noticed it had the same shape. :class:`~glotscope.results.GiniResult` keys on
-``languages`` *and* ``cost_unit`` — §7.4's unit is tokens per aligned line, and
-a Gini computed per sentence or per token is a different number wearing the same
-name. §9 publishes ``corpus_level.gini`` as a bare float, so a reader of two
-documents cannot tell whether the units agree, and neither could this module:
-the check ran over the language sets alone and answered "comparable" either way.
-One rule applied twice — where a document cannot prove two numbers are
-comparable, there is no column. Publishing ``cost_unit`` is the prerequisite
-here too.
+1.4 publishes all four fields, so both are back and both are checked. A 1.3
+document carries none of them and reads as ``None``, which **refuses** against a
+1.4 document rather than treating two unknowns as equal — the same rule, applied
+to the schema boundary itself.
 """
 
 from __future__ import annotations
@@ -58,11 +55,10 @@ _PER_LANGUAGE_METRICS = (
     "ctc",
     "compression_rate",
     "roundtrip_rate",
+    "strr_bare",
+    "strr_leading_space",
 )
-_CORPUS_LEVEL_METRICS = ("renyi_efficiency",)
-"""Gini is not here — see the module docstring. Removing it from the value path
-too, rather than only from :data:`METRICS`, keeps one source of truth: a name
-that cannot be requested has no business having a branch that reads it."""
+_CORPUS_LEVEL_METRICS = ("gini", "renyi_efficiency")
 _TIER0_METRICS = (
     "vocab_size",
     "ill_formed_vocab_rate",
@@ -216,13 +212,33 @@ def _metric_key(result: LoadedResult, metric: str) -> Mapping[str, object]:
     parameters = result.manifest.parameters
     if metric in ("fertility", "p_continued"):
         key["segmenter"] = _named(parameters.segmenter)
-        key["segmenter_model_version"] = parameters.segmenter_model_version
+        # Per language: a run can span several segmenter versions, and comparing
+        # on a single field meant two runs under different UniDic versions both
+        # recorded None and read as comparable.
+        key["segmenter_model_versions"] = (
+            None
+            if parameters.segmenter_model_versions is None
+            else tuple(sorted(parameters.segmenter_model_versions.items()))
+        )
         key["leading_space"] = parameters.leading_space
     elif metric in ("cpt", "bpt", "ctc", "compression_rate"):
         key["compression_rate_unit"] = _compression_unit(result)
     elif metric == "parity":
         parity: Mapping[str, Any] = _corpus_level(result).get("parity", {})
         key["reference_language"] = parity.get("reference_language")
+    elif metric == "gini":
+        # §7.4 is comparable only at a fixed cost unit; 1.4 publishes it, so the
+        # column can come back. A 1.3 document carries no unit and reads as None,
+        # which refuses against a 1.4 one rather than assuming they agree.
+        key["cost_unit"] = _corpus_level(result).get("gini_cost_unit")
+    elif metric in ("strr_bare", "strr_leading_space"):
+        # §7.6 is comparable only at a fixed word list and casing. Both are sets
+        # across languages for the reason the compression unit is: reading the
+        # first language and assuming the rest agree is the assumption this
+        # module exists to check.
+        blocks = _per_language(result).values()
+        key["lowercased"] = frozenset(block.get("strr_lowercased") for block in blocks)
+        key["n_words"] = frozenset(block.get("strr_n_words") for block in blocks)
     elif metric == "renyi_efficiency":
         corpus_level = _corpus_level(result)
         key["alpha"] = corpus_level.get("renyi_alpha")

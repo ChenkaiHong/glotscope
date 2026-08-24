@@ -608,6 +608,7 @@ class Tokenizer:
             warnings.append(_NO_NORMALIZATION_WARNING)
 
         per_language: dict[str, LanguageMetrics] = {}
+        segmenter_versions: dict[str, str] = {}
         document_stats: dict[str, DocumentStats] = {}
         unk_id = _unk_token_id(self._backend, self._spec)
         for language, documents in loaded.lines.items():
@@ -681,6 +682,13 @@ class Tokenizer:
             words: FertilityResult | None = None
             if segmenter is not None:
                 adapter = get_segmenter(segmenter, language=language, gold=sentences)
+                effective_version = segmenter_model_version or adapter.model_version
+                if effective_version is not None:
+                    # Per language, because a run can span several: UD_GOLD records
+                    # the treebank, and two treebanks are two versions. Taken from
+                    # the adapter rather than only from the caller, so the field is
+                    # filled exactly when the value is known.
+                    segmenter_versions[language] = effective_version
                 segmented = [
                     word
                     for document in documents
@@ -700,7 +708,7 @@ class Tokenizer:
                     ),
                     language=language,
                     segmenter=segmenter,
-                    segmenter_model_version=segmenter_model_version or adapter.model_version,
+                    segmenter_model_version=effective_version,
                     leading_space=leading_space,
                     unk_char_rate=(unk_chars / stats.total_chars if stats.total_chars else 0.0),
                 )
@@ -737,7 +745,9 @@ class Tokenizer:
                 normalization=normalization,
                 add_special_tokens=add_special_tokens,
                 segmenter=segmenter,
-                segmenter_model_version=segmenter_model_version,
+                segmenter_model_versions=(
+                    MappingProxyType(dict(segmenter_versions)) if segmenter_versions else None
+                ),
             ),
         )
 

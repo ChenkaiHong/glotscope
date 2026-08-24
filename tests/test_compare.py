@@ -189,19 +189,32 @@ def test_a_corpus_level_metric_tables_a_single_row(tmp_path: Path) -> None:
     assert tuple(table.rows) == ("corpus",)
 
 
-def test_gini_is_not_offered_because_its_unit_is_unpublished(tmp_path: Path) -> None:
-    # The same rule STRR is held to. GiniResult keys on `languages` *and*
-    # `cost_unit`; §9 publishes `corpus_level.gini` as a bare float; a Gini per
-    # sentence is a different number wearing the same name. Tabling two of them
-    # checked the language sets and answered "comparable" either way — the exact
-    # failure this module exists to prevent.
-    # Arrange
+def test_gini_is_offered_and_refuses_a_differing_cost_unit(tmp_path: Path) -> None:
+    # Withdrawn from METRICS while §9 published a bare float, because the check
+    # could see only half the key and answered "comparable" either way. 1.4
+    # publishes `gini_cost_unit`, so the column is back and the refusal is real.
     left = _write(tmp_path / "a.json", _document())
-    right = _write(tmp_path / "b.json", _other_tokenizer(_document()))
+    other = _other_tokenizer(_document())
+    other["tier1"]["corpus_level"]["gini_cost_unit"] = "tokens_per_sentence"
+    right = _write(tmp_path / "b.json", other)
 
-    # Act / Assert
-    with pytest.raises(ValueError, match="renyi_efficiency"):
+    with pytest.raises(IncomparableError) as excinfo:
         compare([left, right], metric="gini")
+    assert excinfo.value.field == "cost_unit"
+
+
+def test_strr_is_offered_and_refuses_a_differing_word_list(tmp_path: Path) -> None:
+    # Same history, same rule: STRR is comparable only at a fixed word list and
+    # casing, and §9 published neither until 1.4.
+    left = _write(tmp_path / "a.json", _document())
+    other = _other_tokenizer(_document())
+    for block in other["tier1"]["per_language"].values():
+        block["strr_n_words"] = 500
+    right = _write(tmp_path / "b.json", other)
+
+    with pytest.raises(IncomparableError) as excinfo:
+        compare([left, right], metric="strr_bare")
+    assert excinfo.value.field == "n_words"
 
 
 def test_an_unknown_metric_names_the_ones_that_exist(tmp_path: Path) -> None:
