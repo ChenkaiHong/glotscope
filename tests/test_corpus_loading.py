@@ -93,7 +93,7 @@ def test_universal_dependencies_records_treebanks_not_language_codes() -> None:
     # morpheme structure. Spanish AnCora's expansions are contractions that do
     # not spell their own token (13.6% concatenate, so the rest admit no
     # character offsets); Turkish IMST's do concatenate but mark derivational
-    # boundaries on 6.34% of words, not the inflectional segmentation §7.7(c)
+    # boundaries on 2.97% of words, not the inflectional segmentation §7.7(c)
     # scores. MorphyNet is the morphology gold.
     assert not corpus.has(Capability.MORPH_GOLD)
 
