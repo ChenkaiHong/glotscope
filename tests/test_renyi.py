@@ -103,3 +103,29 @@ def test_renyi_refuses_nonfinite_alpha(alpha: float) -> None:
 def test_renyi_refuses_zero_count_types() -> None:
     with pytest.raises(ValueError, match="positive"):
         renyi_efficiency_from_counts({"a": 1, "unused": 0}, alpha=2.5)
+
+
+def test_a_single_type_vocabulary_is_zero_efficiency_not_a_division_by_zero() -> None:
+    # Found by mutation: forcing the division broke no test, so nothing exercised
+    # the degenerate case at all. log2(1) is 0, so the guard is what stands
+    # between a published metric and a ZeroDivisionError — and 0.0 is the right
+    # answer, since a one-type vocabulary carries no information to distribute.
+    result = renyi_efficiency(["a", "a", "a"], alpha=2.5)
+
+    assert result.value == 0.0
+    assert result.entropy_bits == pytest.approx(0.0)
+
+
+def test_the_nominal_size_is_recorded_only_under_the_nominal_normalizer() -> None:
+    # Also from mutation: forcing the nominal branch broke nothing. The field is
+    # part of RenyiResult's comparability key, so recording it under the observed
+    # normalizer would make two results differ on a parameter that did not apply.
+    observed = renyi_efficiency(
+        ["a", "b", "b"], alpha=2.5, normalizer=RenyiNormalizer.OBSERVED, nominal_vocab_size=32000
+    )
+    nominal = renyi_efficiency(
+        ["a", "b", "b"], alpha=2.5, normalizer=RenyiNormalizer.NOMINAL, nominal_vocab_size=32000
+    )
+
+    assert observed.nominal_vocab_size is None
+    assert nominal.nominal_vocab_size == 32000
