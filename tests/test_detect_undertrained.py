@@ -289,3 +289,17 @@ def test_the_document_block_carries_the_counts_a_reader_needs(tmp_path: Path) ->
     assert json.loads(json.dumps(block))["indicator"] == "cosine_to_unused_mean"
     assert block["tied"] is True
     assert block["candidates_pre_exclusion"] > block["candidates_post_exclusion"]
+
+
+def test_candidates_carry_their_uax24_script(tmp_path: Path) -> None:
+    # D14's independent variable, end to end. `script` was hardcoded None until
+    # the pinned table existed, because a guess here would have been laundered
+    # straight into the paper's regression.
+    tokenizer = _byte_level(tmp_path / "tokenizer.json", byte_values=range(256))
+
+    report = tokenizer.detect_undertrained(_embeddings(tokenizer), top_pct=100.0)
+
+    by_id = {candidate.token_id: candidate for candidate in report.candidates}
+    assert by_id[ord("A")].script == "Latn"
+    # A digit belongs to no script: Common is the absence of one, not a bucket.
+    assert by_id[ord("7")].script is None
