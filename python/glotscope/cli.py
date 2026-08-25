@@ -331,37 +331,37 @@ def _looks_like_a_local_path(source: str) -> bool:
 def _load_tokenizer(source: str, revision: str | None) -> Tokenizer:
     """Load the tokenizer named on the command line.
 
-    Local sources only — a ``tokenizer.json`` or a directory holding one.
-    ``from_pretrained`` is not implemented, so a revision or a Hub-style
-    identifier is reported as unbuilt rather than resolved to something else: a
-    leaderboard row that silently analysed a different artifact than it names is
+    A local ``tokenizer.json``, a directory holding one, or a Hub identifier.
+    The routing matters more than either branch: a path that does not exist is a
+    wrong argument to fix now, while a bare name is an identifier to resolve, and
+    reporting one as the other sends the reader after the wrong fix.
+
+    A Hub identifier resolves to a commit SHA and that SHA is what the manifest
+    records, so a row can never silently name one artifact and analyse another —
     the failure §11 exists to prevent.
 
     Raises:
-        TokenizerLoadError: the source names a place on this disk that holds no
-            tokenizer. Exit 1 — a wrong argument, not a missing feature.
-        NotImplementedError: the source is a Hub identifier or carries a
-            revision. Exit 2 — scheduled, not refused.
+        TokenizerLoadError: the source names a place on this disk holding no
+            tokenizer, or a repository publishing no ``tokenizer.json``. Exit 1 —
+            a real answer about this input, not a missing feature.
     """
-    if revision is not None:
-        raise NotImplementedError(
-            "--revision selects a Hugging Face revision, and from_pretrained() is "
-            "not implemented in this release. Pass a local tokenizer.json path."
-        )
     path = Path(source)
-    if path.is_dir():
-        candidate = path / "tokenizer.json"
-        if not candidate.is_file():
-            raise TokenizerLoadError(source, "a directory holding no tokenizer.json")
-        return Tokenizer.from_file(candidate)
-    if path.is_file():
-        return Tokenizer.from_file(path)
+    if revision is None:
+        if path.is_dir():
+            candidate = path / "tokenizer.json"
+            if not candidate.is_file():
+                raise TokenizerLoadError(source, "a directory holding no tokenizer.json")
+            return Tokenizer.from_file(candidate)
+        if path.is_file():
+            return Tokenizer.from_file(path)
     if _looks_like_a_local_path(source):
-        raise TokenizerLoadError(source, "no such file or directory")
-    raise NotImplementedError(
-        f"{source!r} is not a local file. Loading by Hub identifier needs "
-        f"from_pretrained(), which is not implemented in this release."
-    )
+        raise TokenizerLoadError(
+            source,
+            "no such file or directory"
+            if revision is None
+            else "--revision selects a commit on the Hub, and this names a local path",
+        )
+    return Tokenizer.from_pretrained(source, revision=revision)
 
 
 def _load_embeddings(source: str, *, vocab_size: int, revision: str | None = None) -> Embeddings:

@@ -106,6 +106,59 @@ _BPE_ALGORITHMS = frozenset({Algorithm.BYTE_LEVEL_BPE, Algorithm.BYTE_FALLBACK_B
 Land & Bartolo report Unigram-LM as untested, and untested is not inapplicable."""
 
 
+_TOKENIZER_FILE = "tokenizer.json"
+_CONFIG_FILE = "config.json"
+
+_UNPINNED_WARNING = (
+    "{model_id} was loaded without a pinned revision; it resolved to {resolved} "
+    "and that SHA is what the manifest records. The numbers are reproducible "
+    "against that commit, but the run did not pin it — a later run of the same "
+    "command can resolve somewhere else, which is what §16.1's nightly job "
+    "exists to catch"
+)
+_NO_HUB_CONFIG_WARNING = (
+    "this repository publishes no config.json, so vocab_size_config is recorded "
+    "as null; §7.9's reference chain reads the gap between it and the "
+    "tokenizer's own count, and back-filling would assert there is none"
+)
+
+
+def _hub() -> tuple[Any, Any]:
+    """``(hf_hub_download, model_info)``, or a message naming the extra.
+
+    Looked up through the module rather than bound at import, for the reason
+    :mod:`glotscope.embeddings` does it: a core install promises Tier 0 and Tier
+    1 and should report the missing extra by name instead of failing at import.
+    """
+    try:
+        import huggingface_hub
+    except ModuleNotFoundError as exc:  # pragma: no cover - exercised by the extra
+        raise ModuleNotFoundError(
+            "loading from the Hub needs `huggingface_hub`, which ships in the "
+            "`tier2` extra: pip install 'glotscope[tier2]'"
+        ) from exc
+    return huggingface_hub.hf_hub_download, huggingface_hub.model_info
+
+
+def _hub_vocab_size_config(download: Any, model_id: str, revision: str | None) -> int | None:
+    """``config.json``'s ``vocab_size``, or ``None`` where the repo has none.
+
+    ``None`` rather than the tokenizer's own count: equal values are a *claim*
+    that the embedding matrix has no padding rows, and that claim is exactly what
+    §7.9's reference-set chain reads at link 2.
+    """
+    try:
+        path = Path(download(model_id, _CONFIG_FILE, revision=revision))
+    except Exception:
+        return None
+    try:
+        config: Mapping[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    size = config.get("vocab_size")
+    return int(size) if isinstance(size, int) else None
+
+
 def _candidates(
     detection: Detection,
     *,
@@ -381,8 +434,63 @@ class Tokenizer:
         mirrors. Mirror-sourced rows must be visibly labelled in the leaderboard
         (§11): a leaderboard that silently uses unofficial mirrors is a legitimate
         line of attack.
+
+        Raises:
+            TokenizerLoadError: if the repository publishes no ``tokenizer.json``.
+                SentencePiece-only repositories are common, and converting one
+                would mean implementing a tokenizer — §3.2's first non-goal, and
+                the thing that keeps this library's claims about other people's
+                tokenizers credible.
         """
-        raise NotImplementedError
+        download, model_info = _hub()
+        info = model_info(model_id, revision=revision)
+        # Resolve before fetching, so the artifact and the recorded revision are
+        # the same commit even if the branch moves between the two calls.
+        resolved = revision or str(getattr(info, "sha", "") or "")
+
+        try:
+            path = Path(download(model_id, _TOKENIZER_FILE, revision=resolved or revision))
+        except Exception as exc:
+            raise TokenizerLoadError(
+                model_id,
+                f"no {_TOKENIZER_FILE} in this repository ({exc}). A "
+                f"SentencePiece-only model would have to be converted, and "
+                f"implementing a tokenizer is §3.2's first non-goal",
+            ) from exc
+
+        raw = path.read_bytes()
+        try:
+            text = raw.decode("utf-8")
+            spec: Mapping[str, Any] = json.loads(text)
+            backend = BackendTokenizer.from_str(text)
+        except Exception as exc:
+            raise TokenizerLoadError(model_id, f"not a valid {_TOKENIZER_FILE} ({exc})") from exc
+
+        warnings: list[str] = []
+        if revision is None:
+            warnings.append(_UNPINNED_WARNING.format(model_id=model_id, resolved=resolved))
+        algorithm = detect_algorithm(spec)
+        if algorithm is Algorithm.UNKNOWN:
+            warnings.append(_UNKNOWN_ALGORITHM_WARNING)
+
+        vocab_size_config = _hub_vocab_size_config(download, model_id, resolved or revision)
+        if vocab_size_config is None:
+            warnings.append(_NO_HUB_CONFIG_WARNING)
+
+        card = getattr(info, "card_data", None) or {}
+        manifest = TokenizerManifest(
+            id=model_id,
+            revision=resolved,
+            tokenizer_json_sha256=hashlib.sha256(raw).hexdigest(),
+            vocab_size_tokenizer=backend.get_vocab_size(with_added_tokens=True),
+            vocab_size_config=vocab_size_config,
+            embedding_rows=None,
+            algorithm=algorithm,
+            source="huggingface",
+            source_is_mirror=is_mirror,
+            license_spdx=card.get("license") or UNKNOWN_LICENSE,
+        )
+        return cls._loaded(backend=backend, spec=spec, manifest=manifest, warnings=tuple(warnings))
 
     @classmethod
     def from_tiktoken(cls, encoding: str) -> Tokenizer:

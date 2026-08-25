@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from tokenizers import Tokenizer as BackendTokenizer
@@ -80,13 +81,31 @@ def test_lint_prints_the_tier0_document(tmp_path: Path, capsys: pytest.CaptureFi
     assert "no upstream revision" in captured.err
 
 
-def test_lint_refuses_a_hub_identifier_as_unbuilt_rather_than_invalid(
-    capsys: pytest.CaptureFixture[str],
+def test_lint_routes_a_hub_identifier_to_the_hub(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Exit 2, not 1: from_pretrained is scheduled, and reporting "refused" here
-    # would tell a script the input was wrong when it was not.
-    assert main(["lint", "acme/tokenizer"]) == 2
-    assert "from_pretrained" in capsys.readouterr().err
+    # This was exit 2 while from_pretrained was unbuilt. It is built now, so the
+    # claim under test is the routing itself: a bare name is an identifier and
+    # reaches the Hub rather than the filesystem.
+    _tokenizer_json(tmp_path)
+    asked: list[str] = []
+
+    def _download(repo_id: str, filename: str, *, revision: str | None = None, **_: object) -> str:
+        asked.append(f"{repo_id}/{filename}")
+        return str(tmp_path / filename)
+
+    class _Info:
+        card_data: ClassVar[dict[str, str]] = {"license": "apache-2.0"}
+        sha = "c" * 40
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", _download)
+    monkeypatch.setattr(huggingface_hub, "model_info", lambda *a, **k: _Info())
+
+    assert main(["lint", "acme/tokenizer"]) == 0
+    assert "acme/tokenizer/tokenizer.json" in asked
+    assert json.loads(capsys.readouterr().out)["vocab_size"] == 256
 
 
 def test_lint_reports_a_mistyped_path_as_a_refusal_not_as_unbuilt(
@@ -121,9 +140,14 @@ def test_lint_reports_a_directory_without_a_tokenizer_json_as_a_refusal(
     assert "tokenizer.json" in capsys.readouterr().err
 
 
-def test_lint_refuses_a_revision_it_cannot_resolve(capsys: pytest.CaptureFixture[str]) -> None:
-    assert main(["lint", "tokenizer.json", "--revision", "a" * 40]) == 2
-    assert "revision" in capsys.readouterr().err
+def test_a_revision_beside_a_local_path_is_a_refusal_not_an_unbuilt_feature(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Exit 1, not 2. --revision selects a commit on the Hub; passing it with a
+    # local path is a wrong argument, and answering "scheduled for a later
+    # release" would send the reader looking for a feature that exists.
+    assert main(["lint", "tokenizer.json", "--revision", "a" * 40]) == 1
+    assert "names a local path" in capsys.readouterr().err
 
 
 def test_analyze_writes_a_result_document(
