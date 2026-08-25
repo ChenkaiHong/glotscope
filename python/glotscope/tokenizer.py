@@ -55,6 +55,7 @@ from glotscope.results import (
 from glotscope.roundtrip import roundtrip_matches_from_ids
 from glotscope.segmenters import get_segmenter
 from glotscope.strr import strr
+from glotscope.unicode_script import script_of
 from glotscope.utf8 import classify_utf8_token
 
 if TYPE_CHECKING:
@@ -119,25 +120,38 @@ def _candidates(
     §7.9 is looking for. It is for display only; re-encoding it would not
     reproduce the id.
 
-    ``script`` is ``None`` for now. UAX #24 attribution is what §14.3 regresses
-    on (D14) and is deferred to M4; a guess here would be laundered into the
-    paper's independent variable.
+    ``script`` is UAX #24 attribution of the decoded token, with ``Common`` and
+    ``Inherited`` resolved through Script_Extensions — the independent variable
+    §14.3 regresses on (D14). ``None`` where a token belongs to no single script:
+    punctuation and digits carry none, and a token mixing two real scripts is
+    refused rather than assigned by majority, because mixed-script tokens are the
+    mojibake and BPE junk Tier 2 exists to surface.
+
+    The table is pinned to one Unicode release rather than read from the runtime;
+    see :mod:`glotscope.unicode_script` for why that is a correctness requirement
+    and not a packaging preference.
     """
     by_id = {token_id: token for token, token_id in vocab.items()}
-    return tuple(
-        TokenCandidate(
+
+    def _candidate(rank: int, token_id: int, value: float) -> TokenCandidate:
+        # Decoded once. A vocabulary is hundreds of thousands of tokens and the
+        # three fields below all derive from the same bytes, so recomputing them
+        # per field is three passes over the whole vocabulary for one answer.
+        token = by_id.get(token_id)
+        raw = b"" if token is None else token_bytes(token, family)
+        text = raw.decode("utf-8", errors="replace")
+        return TokenCandidate(
             token_id=token_id,
-            token_repr=token_bytes(by_id[token_id], family).decode("utf-8", errors="replace")
-            if token_id in by_id
-            else "",
+            token_repr="" if token is None else text,
             indicator=detection.indicator,
             indicator_value=value,
             rank=rank,
-            token_class=classify_utf8_token(token_bytes(by_id[token_id], family))
-            if token_id in by_id
-            else TokenClass.WELL_FORMED,
-            script=None,
+            token_class=TokenClass.WELL_FORMED if token is None else classify_utf8_token(raw),
+            script=None if token is None else script_of(text),
         )
+
+    return tuple(
+        _candidate(rank, token_id, value)
         for rank, (token_id, value) in enumerate(detection.ranked, start=1)
     )
 
