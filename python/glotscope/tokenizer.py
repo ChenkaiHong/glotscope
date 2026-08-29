@@ -55,6 +55,7 @@ from glotscope.results import (
 from glotscope.roundtrip import roundtrip_matches_from_ids
 from glotscope.segmenters import get_segmenter
 from glotscope.strr import strr
+from glotscope.tiktoken_backend import TiktokenBackend, encoding_digest
 from glotscope.unicode_script import script_of
 from glotscope.utf8 import classify_utf8_token
 
@@ -71,6 +72,15 @@ to pin, and inventing one would put an unverifiable string in the field
 _NO_REVISION_WARNING = (
     "local tokenizer.json: no upstream revision exists, so revision is recorded "
     "as 'local' and the artifact's identity rests on tokenizer_json_sha256"
+)
+_TIKTOKEN_REVISION_WARNING = (
+    "tiktoken encoding: no commit exists to pin, so revision records the "
+    "installed tiktoken version and the artifact's identity rests on "
+    "tokenizer_json_sha256, a digest over the encoding's own definition"
+)
+_TIKTOKEN_TIER2_WARNING = (
+    "tiktoken encoding: tokenizer-only, so Tier 2 is unavailable and "
+    "vocab_size_config and embedding_rows are recorded as null"
 )
 _NO_CONFIG_WARNING = (
     "local tokenizer.json: vocab_size_config and embedding_rows are unknown and "
@@ -121,6 +131,36 @@ _NO_HUB_CONFIG_WARNING = (
     "as null; §7.9's reference chain reads the gap between it and the "
     "tokenizer's own count, and back-filling would assert there is none"
 )
+
+
+def _tiktoken() -> Any:
+    """The ``tiktoken`` module, or a message naming the extra.
+
+    Imported here rather than at module scope for the reason
+    :func:`_hub` is: a core install promises Tier 0 and Tier 1, and should report
+    which extra is missing instead of carrying a second tokenizer library so that
+    ``from_file`` can work.
+    """
+    try:
+        import tiktoken
+    except ModuleNotFoundError as exc:  # pragma: no cover - exercised by the extra
+        raise ModuleNotFoundError(
+            "loading an OpenAI encoding needs `tiktoken`, which ships in the "
+            "`tiktoken` extra: pip install 'glotscope[tiktoken]'"
+        ) from exc
+    return tiktoken
+
+
+def _tiktoken_version() -> str:
+    """The installed ``tiktoken`` version, which is half the encoding's identity.
+
+    The ranks come from a fixed URL per encoding, but the split pattern and the
+    special-token table live in ``tiktoken_ext.openai_public`` and have changed
+    between releases. Recording the version is what makes the pair reproducible.
+    """
+    import importlib.metadata
+
+    return importlib.metadata.version("tiktoken")
 
 
 def _hub() -> tuple[Any, Any]:
@@ -382,6 +422,7 @@ class Tokenizer:
     _spec: Mapping[str, Any]
     _manifest: TokenizerManifest
     _warnings: tuple[str, ...]
+    _family: TokenizerFamily | None
     _tier0: Tier0Report | None
 
     def __init__(self) -> None:
@@ -398,6 +439,7 @@ class Tokenizer:
         spec: Mapping[str, Any],
         manifest: TokenizerManifest,
         warnings: tuple[str, ...],
+        family: TokenizerFamily | None = None,
     ) -> Tokenizer:
         """Assemble an instance around an already-captured provenance record.
 
@@ -409,6 +451,7 @@ class Tokenizer:
         tokenizer._spec = spec
         tokenizer._manifest = manifest
         tokenizer._warnings = warnings
+        tokenizer._family = family
         tokenizer._tier0 = None
         return tokenizer
 
@@ -493,7 +536,7 @@ class Tokenizer:
         return cls._loaded(backend=backend, spec=spec, manifest=manifest, warnings=tuple(warnings))
 
     @classmethod
-    def from_tiktoken(cls, encoding: str) -> Tokenizer:
+    def from_tiktoken(cls, encoding_name: str) -> Tokenizer:
         """Load an OpenAI encoding by name.
 
         The complete registry as of the PRD's verification pass: ``o200k_base``,
@@ -507,11 +550,64 @@ class Tokenizer:
         column ``n/a (tokenizer-only)`` rather than leaving it visually empty.
 
         ``tiktoken`` is the ``tiktoken`` extra rather than a core dependency.
-        Import it inside this method and name the extra when it is missing: an
-        unguarded top-level import would make every core install carry a second
-        tokenizer library in order to reach ``from_file``.
+        It is imported inside this method and the extra is named when it is
+        missing: an unguarded top-level import would make every core install
+        carry a second tokenizer library in order to reach ``from_file``.
+
+        **§9 identity comes from the artifact, not from a repository.** An
+        encoding has no ``tokenizer.json`` and no commit, so
+        ``tokenizer_json_sha256`` records a digest over the four things that
+        determine every number it can produce — merge ranks, special tokens,
+        split pattern and vocabulary size — and ``revision`` records the pinned
+        ``tiktoken`` version, because the library is what defines the pattern and
+        the specials. The digest is reproducible on any machine, which is what
+        ``glotscope verify`` needs and what a cache path would not give.
+
+        Raises:
+            TokenizerLoadError: no encoding of that name exists.
         """
-        raise NotImplementedError
+        tiktoken = _tiktoken()
+        try:
+            encoding = tiktoken.get_encoding(encoding_name)
+        except Exception as exc:
+            raise TokenizerLoadError(
+                encoding_name,
+                f"no such tiktoken encoding ({exc}). The registry is defined by "
+                f"the installed tiktoken, so a name it does not know is not a "
+                f"missing download",
+            ) from exc
+
+        backend = TiktokenBackend(encoding)
+        spec: Mapping[str, Any] = MappingProxyType(
+            {
+                "tiktoken": MappingProxyType(
+                    {
+                        "name": str(encoding.name),
+                        "pat_str": str(encoding._pat_str),
+                        "n_vocab": int(encoding.n_vocab),
+                    }
+                )
+            }
+        )
+        manifest = TokenizerManifest(
+            id=str(encoding.name),
+            revision=f"tiktoken/{_tiktoken_version()}",
+            tokenizer_json_sha256=encoding_digest(encoding),
+            vocab_size_tokenizer=backend.get_vocab_size(with_added_tokens=True),
+            vocab_size_config=None,
+            embedding_rows=None,
+            algorithm=Algorithm.TIKTOKEN,
+            source="tiktoken",
+            source_is_mirror=False,
+            license_spdx=UNKNOWN_LICENSE,
+        )
+        return cls._loaded(
+            backend=backend,
+            spec=spec,
+            manifest=manifest,
+            warnings=(_TIKTOKEN_REVISION_WARNING, _TIKTOKEN_TIER2_WARNING),
+            family=TokenizerFamily.BYTE_LEVEL,
+        )
 
     @classmethod
     def from_file(
@@ -604,7 +700,7 @@ class Tokenizer:
         twice for one answer.
         """
         if self._tier0 is None:
-            self._tier0 = lint_backend(self._backend, self._spec)
+            self._tier0 = lint_backend(self._backend, self._spec, family=self._family)
         return self._tier0
 
     def with_weights(self, *, embedding_rows: int) -> tuple[TokenizerManifest, tuple[str, ...]]:

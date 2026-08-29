@@ -328,10 +328,21 @@ def _looks_like_a_local_path(source: str) -> bool:
     )
 
 
+_TIKTOKEN_PREFIX = "tiktoken:"
+"""Marks an OpenAI encoding on the command line, e.g. ``tiktoken:o200k_base``.
+
+An explicit prefix rather than a list of known encoding names: the registry is
+whatever the installed ``tiktoken`` knows, so a name-sniffing rule would send a
+newly-published encoding to the Hub and report it as a missing repository. A Hub
+identifier cannot contain a colon, so the two namespaces cannot collide.
+"""
+
+
 def _load_tokenizer(source: str, revision: str | None) -> Tokenizer:
     """Load the tokenizer named on the command line.
 
-    A local ``tokenizer.json``, a directory holding one, or a Hub identifier.
+    An OpenAI encoding behind ``tiktoken:``, a local ``tokenizer.json``, a
+    directory holding one, or a Hub identifier.
     The routing matters more than either branch: a path that does not exist is a
     wrong argument to fix now, while a bare name is an identifier to resolve, and
     reporting one as the other sends the reader after the wrong fix.
@@ -345,6 +356,16 @@ def _load_tokenizer(source: str, revision: str | None) -> Tokenizer:
             tokenizer, or a repository publishing no ``tokenizer.json``. Exit 1 —
             a real answer about this input, not a missing feature.
     """
+    if source.startswith(_TIKTOKEN_PREFIX):
+        if revision is not None:
+            raise TokenizerLoadError(
+                source,
+                "--revision selects a commit on the Hub, and an OpenAI encoding "
+                "is defined by the installed tiktoken rather than by a commit. "
+                "Its identity is the tokenizer_json_sha256 the manifest records",
+            )
+        return Tokenizer.from_tiktoken(source[len(_TIKTOKEN_PREFIX) :])
+
     path = Path(source)
     if revision is None:
         if path.is_dir():

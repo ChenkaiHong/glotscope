@@ -57,7 +57,7 @@ U1..U5 (blocking unknowns)
        ├─ Tier 0                      <- no external data; start here
        │    ├─ utf8.py    three disjoint classes; hand-built vocab test        [done]
        │    ├─ lint.py    unreachable, byte-fallback coverage, family classifier [done]
-       │    └─ Tokenizer.from_file [done] / from_tiktoken / from_pretrained + manifest
+       │    └─ Tokenizer.from_file / from_pretrained / from_tiktoken + manifest        [done]
        │
        ├─ Tier 1 segmenter-free       <- needs FLORES+ (gated: HF_TOKEN or vendored subset)
        │    ├─ compression.py   CPT/BPT/CTC + CR (U1 resolved)
