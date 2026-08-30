@@ -31,22 +31,24 @@ import argparse
 import json
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from glotscope import __version__, backend
 from glotscope.compare import METRICS
 from glotscope.compare import compare as compare_results
-from glotscope.corpus import REGISTRY, Corpus, LoadedCorpus
+from glotscope.corpus import REGISTRY, Corpus
 from glotscope.detect import AGREEMENT_THRESHOLD
 from glotscope.document import load_result
 from glotscope.embeddings import Embeddings
 from glotscope.enums import MorphologicalType, Normalization, RenyiNormalizer, Segmenter
 from glotscope.errors import GlotscopeError, TokenizerLoadError
+from glotscope.leaderboard import load_config, render_markdown, run_leaderboard
+from glotscope.loading import load_embeddings as _load_embeddings
+from glotscope.loading import load_tokenizer as _load_tokenizer
 from glotscope.manifest import Manifest, ParameterManifest, canonical_json, environment
 from glotscope.report import Report, Tier0Report
-from glotscope.results import CorpusMetrics
+from glotscope.reporting import build_report as _build_report
 from glotscope.tokenizer import Tokenizer
 
 __all__ = ["build_parser", "main"]
@@ -96,9 +98,10 @@ _REFUSED = 1
 _NOT_YET = 2
 """Exit code for a subcommand whose implementation is still scheduled."""
 
-_MILESTONES = {
-    "leaderboard": "M3",
-}
+_MILESTONES: dict[str, str] = {}
+"""Subcommands scheduled but not built. Empty since the leaderboard landed —
+kept because exit 2 is part of the interface (§8.2) and the next scheduled
+command should reuse it rather than reinvent the distinction."""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -259,8 +262,23 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--format", choices=["md", "json", "csv"], default="md")
 
     leaderboard = sub.add_parser("leaderboard", help="regenerate the published leaderboard")
-    leaderboard.add_argument("--config", required=True)
-    leaderboard.add_argument("--out", required=True)
+    leaderboard.add_argument(
+        "--config",
+        required=True,
+        help="leaderboard.yaml, or the same document as .json for a core install",
+    )
+    leaderboard.add_argument("--out", required=True, help="directory for leaderboard.json and .md")
+    leaderboard.add_argument(
+        "--corpus-root",
+        default=".",
+        help="directory holding the downloaded corpora; the library ships none (D12)",
+    )
+    leaderboard.add_argument(
+        "--top-pct",
+        type=float,
+        default=2.0,
+        help="§7.9 candidate share, for rows that declare weights",
+    )
 
     verify = sub.add_parser("verify", help="re-check that a manifest reproduces its numbers")
     verify.add_argument("result", help="path to a result.json")
@@ -309,111 +327,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _looks_like_a_local_path(source: str) -> bool:
-    """Tell a path the user meant from a Hub identifier they meant.
-
-    Only reached once the source has been shown not to exist, and the two
-    answers differ in what they tell the reader: a path is a wrong argument to
-    fix now, an identifier is a feature scheduled for a later release. Guessing
-    "identifier" for both is what made a typo look like a missing feature.
-    """
-    path = Path(source)
-    return (
-        path.is_absolute()
-        or source.startswith(("~", "./", "../", ".\\", "..\\"))
-        or path.suffix == ".json"
-        # A parent that exists means the user was naming a place on this disk.
-        # "." is excluded: a bare name is the shape a Hub identifier takes.
-        or (str(path.parent) != "." and path.parent.is_dir())
-    )
-
-
-_TIKTOKEN_PREFIX = "tiktoken:"
-"""Marks an OpenAI encoding on the command line, e.g. ``tiktoken:o200k_base``.
-
-An explicit prefix rather than a list of known encoding names: the registry is
-whatever the installed ``tiktoken`` knows, so a name-sniffing rule would send a
-newly-published encoding to the Hub and report it as a missing repository. A Hub
-identifier cannot contain a colon, so the two namespaces cannot collide.
-"""
-
-
-def _load_tokenizer(source: str, revision: str | None) -> Tokenizer:
-    """Load the tokenizer named on the command line.
-
-    An OpenAI encoding behind ``tiktoken:``, a local ``tokenizer.json``, a
-    directory holding one, or a Hub identifier.
-    The routing matters more than either branch: a path that does not exist is a
-    wrong argument to fix now, while a bare name is an identifier to resolve, and
-    reporting one as the other sends the reader after the wrong fix.
-
-    A Hub identifier resolves to a commit SHA and that SHA is what the manifest
-    records, so a row can never silently name one artifact and analyse another —
-    the failure §11 exists to prevent.
-
-    Raises:
-        TokenizerLoadError: the source names a place on this disk holding no
-            tokenizer, or a repository publishing no ``tokenizer.json``. Exit 1 —
-            a real answer about this input, not a missing feature.
-    """
-    if source.startswith(_TIKTOKEN_PREFIX):
-        if revision is not None:
-            raise TokenizerLoadError(
-                source,
-                "--revision selects a commit on the Hub, and an OpenAI encoding "
-                "is defined by the installed tiktoken rather than by a commit. "
-                "Its identity is the tokenizer_json_sha256 the manifest records",
-            )
-        return Tokenizer.from_tiktoken(source[len(_TIKTOKEN_PREFIX) :])
-
-    path = Path(source)
-    if revision is None:
-        if path.is_dir():
-            candidate = path / "tokenizer.json"
-            if not candidate.is_file():
-                raise TokenizerLoadError(source, "a directory holding no tokenizer.json")
-            return Tokenizer.from_file(candidate)
-        if path.is_file():
-            return Tokenizer.from_file(path)
-    if _looks_like_a_local_path(source):
-        raise TokenizerLoadError(
-            source,
-            "no such file or directory"
-            if revision is None
-            else "--revision selects a commit on the Hub, and this names a local path",
-        )
-    return Tokenizer.from_pretrained(source, revision=revision)
-
-
-def _load_embeddings(source: str, *, vocab_size: int, revision: str | None = None) -> Embeddings:
-    """Load the weights named on the command line.
-
-    A bare name is a Hub identifier and is resolved as one; anything that names
-    a place on this disk is read from there. Collapsing the two would report a
-    mistyped path as a missing model, or a model as a mistyped path, and send
-    the reader after the wrong fix either way.
-
-    Unlike the tokenizer, the Hub path here is implemented:
-    ``Embeddings.from_checkpoint`` reads only the shards holding the embedding
-    tensors, which is 8.94 GB of Jamba's 96.06 GB rather than all of it.
-
-    Raises:
-        FileNotFoundError: the source names a place on this disk holding nothing.
-    """
-    path = Path(source)
-    if path.is_file():
-        if revision is not None:
-            raise ValueError(
-                f"--weights-revision names a commit on the Hub, and {source} is a "
-                f"file on this disk. Recording a revision beside a local path "
-                f"would pin nothing; that file's identity is its shard_sha256."
-            )
-        return Embeddings.from_file(path, vocab_size=vocab_size)
-    if _looks_like_a_local_path(source):
-        raise FileNotFoundError(f"{source}: no such file or directory")
-    return Embeddings.from_checkpoint(source, revision=revision)
-
-
 def _emit(document: str, out: str | None) -> None:
     if out is None:
         sys.stdout.write(document)
@@ -448,74 +361,6 @@ def _lint(args: argparse.Namespace) -> int:
         print(f"warning: {warning}", file=sys.stderr)
     _emit(canonical_json(report.to_dict()) + "\n", None)
     return 0
-
-
-def _build_report(
-    tokenizer: Tokenizer,
-    loaded: LoadedCorpus,
-    *,
-    leading_space: bool,
-    normalization: Normalization,
-    add_special_tokens: bool,
-    segmenter: Segmenter | None,
-    parity_reference: str | None,
-    gini: bool,
-    renyi_alpha: float | None,
-    renyi_normalizer: RenyiNormalizer,
-    nominal_vocab_size: int | None,
-    morphological_types: Mapping[str, MorphologicalType] | None = None,
-    frequency_weighted: bool | None = None,
-    include_single_token_words: bool | None = None,
-) -> Report:
-    """Assemble the §9 document. One code path, used by ``analyze`` and ``verify``.
-
-    Shared rather than reimplemented because ``verify``'s whole claim is that it
-    regenerates what ``analyze`` produced. A second assembly of the same document
-    would be a second thing to drift, and that drift would surface as a
-    verification failure blamed on the numbers.
-    """
-    tier1 = tokenizer.analyze(
-        loaded,
-        leading_space=leading_space,
-        normalization=normalization,
-        add_special_tokens=add_special_tokens,
-        segmenter=segmenter,
-        morphological_types=morphological_types,
-        frequency_weighted=frequency_weighted,
-        include_single_token_words=include_single_token_words,
-    )
-    tier1 = replace(
-        tier1,
-        corpus_level=CorpusMetrics(
-            gini=tier1.gini() if gini else None,
-            renyi=(
-                tier1.renyi_efficiency(
-                    renyi_alpha,
-                    normalizer=renyi_normalizer,
-                    nominal_vocab_size=nominal_vocab_size,
-                )
-                if renyi_alpha is not None
-                else None
-            ),
-            parity=tier1.parity(parity_reference) if parity_reference is not None else None,
-        ),
-    )
-    if tier1.parameters is None or tier1.corpus is None:
-        raise RuntimeError("analyze() returned a report without its manifest fragments")
-
-    return Report(
-        tier0=tokenizer.lint(),
-        tier1=tier1,
-        manifest=Manifest(
-            tokenizer=tokenizer.manifest,
-            parameters=tier1.parameters,
-            environment=environment(),
-            backend=backend(),
-            glotscope_version=__version__,
-            corpus=tier1.corpus,
-        ),
-        warnings=tokenizer.warnings,
-    )
 
 
 def _analyze(args: argparse.Namespace) -> int:
@@ -932,6 +777,37 @@ def _regenerate_analyze(
     )
 
 
+def _leaderboard(args: argparse.Namespace) -> int:
+    """Regenerate the published board (§16.1).
+
+    Two files, not one: ``leaderboard.json`` carries every row's full manifest
+    and is what §16.1's nightly job compares, while ``leaderboard.md`` is what a
+    person reads. Rendering at publish time rather than storing only the table
+    keeps the numbers and their provenance in the same run.
+
+    Output is canonical JSON so a regeneration diffs against the published board
+    on the numbers alone — key order drifting between runs would make every
+    night a diff and the nightly check useless.
+    """
+    config = load_config(args.config)
+    board = run_leaderboard(config, corpus_root=args.corpus_root, top_pct=args.top_pct)
+    document = board.to_dict()
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "leaderboard.json").write_text(canonical_json(document) + "\n", encoding="utf-8")
+    (out / "leaderboard.md").write_text(render_markdown(document), encoding="utf-8")
+
+    for row in board.rows:
+        if row.skipped is not None:
+            print(f"warning: {row.entry.display} skipped — {row.skipped}", file=sys.stderr)
+    print(
+        f"{board.published} published, {board.skipped} skipped -> {out}",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def _compare(args: argparse.Namespace) -> int:
     """Table one metric across published results (PRD §8.2).
 
@@ -954,6 +830,7 @@ _HANDLERS = {
     "analyze": _analyze,
     "detect": _detect,
     "compare": _compare,
+    "leaderboard": _leaderboard,
     "verify": _verify,
 }
 

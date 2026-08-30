@@ -54,6 +54,12 @@ Nine varieties are dev-only — `brx_Deva`, `dar_Cyrl`, `dgo_Deva`, `gom_Deva`, 
 `udm_Cyrl`, `uzs_Arab`, `wuu_Hans` — and three are devtest-only: `cat_Latn_vale1252`, `kaa_Latn`,
 `khk_Mong`.
 
+FLORES+ also renames one code the internal specification's core set depends on: **§10.2's
+`zho_Hans` does not exist in this release**, which carries `cmn_Hans` (and `cmn_Hant`) instead — the
+individual Mandarin code rather than the Chinese macrolanguage code FLORES-200 used. The board uses
+`cmn_Hans` and says so here; it is the same variety under a code the release actually publishes, not
+a substitution of one language for another. The other fourteen core-set codes are present unchanged.
+
 This matters because the analysis is specified over **devtest** — clean translated prose is what makes
 corpus attribution return ≈0 and script attribution the primary variable. So the planned n is **221**,
 not 229, and 230 is reachable only by mixing splits, which would mix clean devtest prose with dev.

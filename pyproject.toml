@@ -72,6 +72,14 @@ tier2 = [
 tiktoken = [
     "tiktoken>=0.7",
 ]
+# §8.2 spells the leaderboard config `leaderboard.yaml`, and YAML is the right
+# shape for a roster of eighteen models: it holds comments, and the reason a row
+# is a mirror belongs beside the row. A YAML parser is not in the core install,
+# and G1's clean-install promise is measured on core — so the same config is
+# read from JSON with the standard library, and this extra is what YAML needs.
+leaderboard = [
+    "pyyaml>=6.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
@@ -86,6 +94,8 @@ dev = [
     "numpy>=1.24,<2.5",
     "huggingface_hub>=0.34",
     "tiktoken>=0.7",
+    "pyyaml>=6.0",
+    "types-PyYAML>=6.0",
 ]
 
 [project.scripts]
@@ -103,6 +113,7 @@ include = [
     "python/glotscope/**",
     "tests/**",
     "scripts/**",
+    "leaderboard.yaml",
     "docs/build-order.md",
     "docs/divergences.md",
     "docs/m0-source-audit.md",
