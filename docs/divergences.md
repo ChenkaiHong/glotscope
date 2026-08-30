@@ -3,6 +3,37 @@
 This file records deliberate and unresolved differences from published implementations. Entries are
 not tuned away; each states whether it may be used as a reproduction gate.
 
+## TokLens' GPT-2 Japanese premium (~56x) is not reachable on FLORES+ devtest
+
+**Status:** does not reproduce; not a reproduction gate. Unresolved pending TokLens' own definition.
+
+§12.1 lists "GPT-2 Japanese ~56x English (TokLens, +/-10%)" with the note that the segmenter must
+match TokLens or the difference be logged. This is the log. Measured on FLORES+ devtest at revision
+`5fec6c13`, 1012 aligned documents per language, GPT-2's vocabulary (identical counts through
+`tokenizers` and through tiktoken `r50k_base`):
+
+| framing | eng_Latn | jpn_Jpan | ratio |
+|---|---|---|---|
+| tokens per document (ratio of means, D7) | 26.72 | 79.26 | **2.97** |
+| tokens per document (mean of per-document ratios) | | | 3.02 |
+| tokens per character | 0.2049 | 1.4087 | 6.87 |
+| tokens per byte | 0.2047 | 0.4800 | 2.34 |
+| per-document ratio, worst case | | | 5.67 |
+
+No framing tried comes near 56. The bound is stronger than a disagreement about Japanese: across
+**all 221 devtest varieties**, the largest GPT-2 premium against English is `shn_Mymr` at 18.69x, and
+`jpn_Jpan` ranks 93rd. So 56x is outside the range this corpus and this tokenizer can produce for any
+language, and no choice of word segmenter changes that — every quantity above is segmenter-free.
+
+What is *not* claimed: that the published figure is wrong. TokLens' definition was not read from
+source, and the same exercise for TokEval (U1) showed that a compression "rate" can mean a ratio of
+totals in one implementation and a mean of per-document ratios in another. The resolution is to pin
+TokLens' revision and read the quantity it computes, exactly as U1 was resolved — not to search for a
+framing that lands on 56.
+
+Reproduce with `Corpus.flores_plus(["eng_Latn", "jpn_Jpan"]).load(root)` and
+`Tokenizer.from_tiktoken("r50k_base")`.
+
 ## FLORES+ publishes 227 dev and 221 devtest varieties, not 229
 
 **Status:** upstream count; changes the denominator of a planned analysis.
