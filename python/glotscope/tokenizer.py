@@ -735,6 +735,7 @@ class Tokenizer:
         normalization: Normalization | str = Normalization.NFC,
         add_special_tokens: bool = False,
         segmenter: Segmenter | None = None,
+        segmenter_model: str | Path | None = None,
         segmenter_model_version: str | None = None,
         morphological_types: Mapping[str, MorphologicalType] | None = None,
         frequency_weighted: bool | None = None,
@@ -751,6 +752,11 @@ class Tokenizer:
         parameter of the question rather than of the run — a report holding one
         finished Renyi number could not answer a second alpha without
         re-encoding the corpus.
+
+        ``segmenter_model`` is required by ``STANZA`` and ``UDPIPE`` and ignored by
+        every other member. Both are trained models, and neither will download
+        one: an artifact fetched on first use would sit behind every number the
+        run publishes without the manifest ever seeing it.
 
         ``segmenter`` defaults to ``None``, which is legal: parity, Gini, Renyi and
         the compression family are segmenter-free, and §14.3 step 1 runs parity
@@ -899,7 +905,9 @@ class Tokenizer:
             document_stats[language] = stats
             words: FertilityResult | None = None
             if segmenter is not None:
-                adapter = get_segmenter(segmenter, language=language, gold=sentences)
+                adapter = get_segmenter(
+                    segmenter, language=language, gold=sentences, model=segmenter_model
+                )
                 effective_version = segmenter_model_version or adapter.model_version
                 if effective_version is not None:
                     # Per language, because a run can span several: UD_GOLD records

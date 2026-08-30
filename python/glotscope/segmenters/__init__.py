@@ -23,6 +23,7 @@ install (G1).
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from glotscope.conllu import GoldSentences
@@ -32,6 +33,7 @@ from glotscope.segmenters.builtin import load_icu, load_whitespace
 from glotscope.segmenters.east_asian import load_jieba, load_mecab
 from glotscope.segmenters.gold import UdGoldSegmenter
 from glotscope.segmenters.southeast_asian import load_khmer_nltk, load_pythainlp
+from glotscope.segmenters.trained import load_stanza, load_udpipe
 
 __all__ = ["WordSegmenter", "available", "get_segmenter"]
 
@@ -57,6 +59,15 @@ class WordSegmenter(Protocol):
         """Split ``text`` into words. Blank runs are dropped; punctuation is not."""
 
 
+_TRAINED: dict[Segmenter, Callable[[str, str | Path | None], WordSegmenter]] = {
+    Segmenter.STANZA: load_stanza,
+    Segmenter.UDPIPE: load_udpipe,
+}
+"""Adapters that need a pinned model file, so they take one more argument than
+the rest. Separate from ``_LOADERS`` rather than widening every loader's
+signature: a rule-based segmenter has no model, and giving it a parameter it must
+ignore invites one being passed and silently dropped."""
+
 _LOADERS: dict[Segmenter, Callable[[str], WordSegmenter]] = {
     Segmenter.WHITESPACE: load_whitespace,
     Segmenter.ICU: load_icu,
@@ -77,23 +88,12 @@ _PROBE_LANGUAGE: dict[Segmenter, str] = {
 """A language each adapter accepts, so :func:`available` can build one without
 tripping the scope check it is not asking about."""
 
-_UNBUILT: dict[Segmenter, str] = {
-    Segmenter.STANZA: (
-        "stanza segmentation is not built yet. The decision it was waiting on is "
-        "made: the model is an explicit local path the caller pins and glotscope "
-        "records, never a download on first use, which would put an unrecorded "
-        "artifact behind a published number"
-    ),
-    Segmenter.UDPIPE: (
-        "UDPipe segmentation is not built yet. The decision it was waiting on is "
-        "made: the model is an explicit local path the caller pins and glotscope "
-        "records, never a download on first use, which would put an unrecorded "
-        "artifact behind a published number"
-    ),
-}
-"""Scheduled, not refused. These raise ``NotImplementedError`` so a caller is
-told the feature is unbuilt rather than sent to install an extra that would not
-help."""
+_UNBUILT: dict[Segmenter, str] = {}
+"""Scheduled, not refused. A member here raises ``NotImplementedError`` so a
+caller is told the feature is unbuilt rather than sent to install an extra that
+would not help. Empty since Stanza and UDPipe landed — kept because the
+distinction between *unbuilt* and *unavailable* is part of the interface, and
+the next scheduled adapter should reuse it rather than reinvent it."""
 
 
 def get_segmenter(
@@ -101,6 +101,7 @@ def get_segmenter(
     *,
     language: str,
     gold: GoldSentences | None = None,
+    model: str | Path | None = None,
 ) -> WordSegmenter:
     """Build the adapter for ``segmenter``, for ``language``.
 
@@ -108,6 +109,10 @@ def get_segmenter(
         segmenter: which convention to apply. There is no default (D6).
         language: the corpus language code. Used for the scope check and, for
             ICU, to pick the locale.
+        model: a pinned model file, required by ``STANZA`` and ``UDPIPE`` and
+            ignored by every other member. Explicit because both libraries would
+            otherwise download one, putting an artifact nobody chose behind every
+            number the run publishes — and §7.1 requires the model recorded.
         gold: parsed treebank annotation, required by ``UD_GOLD`` and ignored by
             every other member. It is a parameter rather than something this
             function loads because gold boundaries are a property of the corpus
@@ -123,6 +128,8 @@ def get_segmenter(
     """
     if segmenter in _UNBUILT:
         raise NotImplementedError(f"{segmenter.value}: {_UNBUILT[segmenter]}.")
+    if segmenter in _TRAINED:
+        return _TRAINED[segmenter](language, model)
     if segmenter is Segmenter.UD_GOLD:
         if gold is None:
             raise ValueError(

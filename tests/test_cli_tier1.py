@@ -239,16 +239,19 @@ def test_analyze_refuses_ud_gold_against_flores(
     assert "word_segmentation" in capsys.readouterr().err
 
 
-def test_analyze_reports_a_segmenter_it_cannot_run_as_unbuilt(
+def test_analyze_asks_for_the_model_a_trained_segmenter_needs(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _flores(tmp_path)
 
-    assert main(_analyze_argv(tmp_path, "--segmenter", "stanza")) == 2
-    # Exit 2 and a message naming what is actually missing: stanza needs a
-    # pinned model, which is a decision rather than an install. Exit 1 would
-    # tell a script its argument was wrong when it was not.
-    assert "explicit local path" in capsys.readouterr().err
+    assert main(_analyze_argv(tmp_path, "--segmenter", "stanza")) == 1
+    # Exit 1, not 2: stanza is built now, so this is a real answer about the
+    # arguments — --segmenter-model is missing — rather than a feature scheduled
+    # for a later release. Exit 2 would tell a script to wait for a version that
+    # already shipped.
+    message = capsys.readouterr().err
+    assert "--segmenter-model" in message or "model=" in message
+    assert "download" in message
 
 
 def test_analyze_runs_a_built_segmenter_end_to_end(

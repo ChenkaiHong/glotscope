@@ -159,6 +159,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     analyze.add_argument(
+        "--segmenter-model",
+        default=None,
+        help=(
+            "path to the trained model for --segmenter stanza or udpipe. Required "
+            "for those two and ignored by the rest: neither will download a model, "
+            "because one fetched on first use sits behind every published number "
+            "with the manifest never having seen it"
+        ),
+    )
+    analyze.add_argument(
         "--leading-space",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -415,6 +425,7 @@ def _analyze(args: argparse.Namespace) -> int:
         normalization=Normalization(args.normalization),
         add_special_tokens=args.add_special_tokens,
         segmenter=Segmenter(args.segmenter) if args.segmenter is not None else None,
+        segmenter_model=args.segmenter_model,
         parity_reference=args.parity_reference,
         gini=args.gini,
         renyi_alpha=args.renyi_alpha,
