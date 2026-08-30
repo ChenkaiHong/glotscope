@@ -7,6 +7,7 @@ and rendering must never invent a number it was not given.
 
 from __future__ import annotations
 
+from glotscope.leaderboard.check import ALL_TIERS, check_board
 from glotscope.leaderboard.config import (
     ConfigError,
     CorpusPlan,
@@ -24,6 +25,7 @@ from glotscope.leaderboard.run import (
 )
 
 __all__ = [
+    "ALL_TIERS",
     "TOKENIZER_ONLY",
     "ConfigError",
     "CorpusPlan",
@@ -32,6 +34,7 @@ __all__ = [
     "LeaderboardRow",
     "ParameterPlan",
     "RosterEntry",
+    "check_board",
     "load_config",
     "render_markdown",
     "run_leaderboard",

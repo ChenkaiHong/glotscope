@@ -27,9 +27,10 @@ from glotscope.errors import (
     TokenizerLoadError,
     UnsupportedCheckpointError,
 )
+from glotscope.leaderboard.check import ALL_TIERS
 from glotscope.leaderboard.config import LeaderboardConfig, RosterEntry
 from glotscope.loading import load_embeddings, load_tokenizer
-from glotscope.manifest import environment
+from glotscope.manifest import Manifest, ParameterManifest, environment
 from glotscope.report import Report
 from glotscope.reporting import build_report
 from glotscope.tokenizer import Tokenizer
@@ -145,15 +146,46 @@ def _tier2(tokenizer: Tokenizer, entry: RosterEntry, *, top_pct: float) -> Any:
     return tokenizer.detect_undertrained(embeddings, top_pct=top_pct)
 
 
+def _tier0_only(tokenizer: Tokenizer, config: LeaderboardConfig) -> Report:
+    """A document for a run that read no corpus.
+
+    The nightly re-check runs where FLORES+ is gated, so it can recompute Tier 0
+    and nothing else. The manifest's ``corpus`` block is ``None`` rather than
+    copied from the published board: this run did not read a corpus, and a
+    document claiming one it never opened is the kind of provenance §9 exists to
+    prevent.
+    """
+    parameters = config.parameters
+    return Report(
+        tier0=tokenizer.lint(),
+        manifest=Manifest(
+            tokenizer=tokenizer.manifest,
+            parameters=ParameterManifest(
+                leading_space=parameters.leading_space,
+                normalization=parameters.normalization,
+                add_special_tokens=parameters.add_special_tokens,
+                segmenter=parameters.segmenter,
+            ),
+            environment=environment(),
+            backend=backend(),
+            glotscope_version=__version__,
+            corpus=None,
+        ),
+        warnings=tokenizer.warnings,
+    )
+
+
 def _run_row(
     entry: RosterEntry,
-    loaded: LoadedCorpus,
+    loaded: LoadedCorpus | None,
     config: LeaderboardConfig,
     *,
     top_pct: float,
 ) -> LeaderboardRow:
     try:
         tokenizer = load_tokenizer(entry.id, entry.revision)
+        if loaded is None:
+            return LeaderboardRow(entry=entry, result=_tier0_only(tokenizer, config).to_dict())
         report: Report = build_report(
             tokenizer,
             loaded,
@@ -189,6 +221,7 @@ def run_leaderboard(
     *,
     corpus_root: str | Path,
     top_pct: float = 2.0,
+    tiers: Sequence[str] = ALL_TIERS,
 ) -> LeaderboardDocument:
     """Run every roster row over one corpus read once.
 
@@ -201,14 +234,20 @@ def run_leaderboard(
     A corpus that cannot load raises rather than skipping. One unreachable row is
     one row; an unreachable corpus is every number on the board, and skipping it
     would publish an empty table as a success.
+
+    ``tiers`` names what to compute. Without ``tier1`` no corpus is read at all
+    and every row is Tier 0 — which is what lets the nightly re-check run on an
+    anonymous runner, where FLORES+ is gated and there is no corpus to read.
     """
-    corpus = Corpus.resolve(
-        config.corpus.id,
-        list(config.corpus.languages),
-        split=config.corpus.split,
-        version=config.corpus.version,
-    )
-    loaded = corpus.load(corpus_root, license_filter=config.corpus.license_filter)
+    loaded: LoadedCorpus | None = None
+    if "tier1" in tiers:
+        corpus = Corpus.resolve(
+            config.corpus.id,
+            list(config.corpus.languages),
+            split=config.corpus.split,
+            version=config.corpus.version,
+        )
+        loaded = corpus.load(corpus_root, license_filter=config.corpus.license_filter)
 
     rows: Sequence[LeaderboardRow] = [
         _run_row(entry, loaded, config, top_pct=top_pct) for entry in config.roster
@@ -216,5 +255,5 @@ def run_leaderboard(
     return LeaderboardDocument(
         config=config,
         rows=tuple(rows),
-        corpus_sha256=loaded.corpus.sha256,
+        corpus_sha256=loaded.corpus.sha256 if loaded is not None else "",
     )

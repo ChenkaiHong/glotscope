@@ -117,3 +117,80 @@ def test_the_output_is_canonical_so_a_rerun_diffs_cleanly(
     assert (first / "leaderboard.json").read_text(encoding="utf-8") == (
         second / "leaderboard.json"
     ).read_text(encoding="utf-8")
+
+
+def test_check_passes_against_a_board_it_just_wrote(
+    tmp_path: Path, toy_encoding: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The nightly job's happy path: regenerate, compare, nothing moved."""
+    config, root = _fixture(tmp_path)
+    out = tmp_path / "results"
+    assert (
+        main(
+            ["leaderboard", "--config", str(config), "--out", str(out), "--corpus-root", str(root)]
+        )
+        == 0
+    )
+
+    assert (
+        main(
+            [
+                "leaderboard",
+                "--config",
+                str(config),
+                "--check",
+                str(out / "leaderboard.json"),
+                "--corpus-root",
+                str(root),
+            ]
+        )
+        == 0
+    )
+    assert "unchanged" in capsys.readouterr().err
+
+
+def test_check_fails_when_a_published_number_moves(
+    tmp_path: Path, toy_encoding: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """§16.1's whole point. Exit 1 and name what moved."""
+    config, root = _fixture(tmp_path)
+    out = tmp_path / "results"
+    assert (
+        main(
+            ["leaderboard", "--config", str(config), "--out", str(out), "--corpus-root", str(root)]
+        )
+        == 0
+    )
+
+    published = json.loads((out / "leaderboard.json").read_text(encoding="utf-8"))
+    published["rows"][0]["result"]["tier0"]["vocab_size"] = 1
+    (out / "leaderboard.json").write_text(json.dumps(published), encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "leaderboard",
+                "--config",
+                str(config),
+                "--check",
+                str(out / "leaderboard.json"),
+                "--corpus-root",
+                str(root),
+            ]
+        )
+        == 1
+    )
+    captured = capsys.readouterr().err
+    assert "moved" in captured
+    assert "vocab_size" in captured
+
+
+def test_neither_out_nor_check_is_refused(
+    tmp_path: Path, toy_encoding: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A run that publishes nothing and checks nothing did work for no reason,
+    and silently exiting 0 would look like a passing nightly job."""
+    config, _ = _fixture(tmp_path)
+
+    assert main(["leaderboard", "--config", str(config)]) == 1
+    assert "nothing to do" in capsys.readouterr().err

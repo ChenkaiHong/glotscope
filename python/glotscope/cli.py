@@ -43,7 +43,13 @@ from glotscope.document import load_result
 from glotscope.embeddings import Embeddings
 from glotscope.enums import MorphologicalType, Normalization, RenyiNormalizer, Segmenter
 from glotscope.errors import GlotscopeError, TokenizerLoadError
-from glotscope.leaderboard import load_config, render_markdown, run_leaderboard
+from glotscope.leaderboard import (
+    ALL_TIERS,
+    check_board,
+    load_config,
+    render_markdown,
+    run_leaderboard,
+)
 from glotscope.loading import load_embeddings as _load_embeddings
 from glotscope.loading import load_tokenizer as _load_tokenizer
 from glotscope.manifest import Manifest, ParameterManifest, canonical_json, environment
@@ -267,7 +273,31 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="leaderboard.yaml, or the same document as .json for a core install",
     )
-    leaderboard.add_argument("--out", required=True, help="directory for leaderboard.json and .md")
+    leaderboard.add_argument(
+        "--out",
+        default=None,
+        help="directory for leaderboard.json and .md; optional when only --check is wanted",
+    )
+    leaderboard.add_argument(
+        "--check",
+        default=None,
+        help=(
+            "a published leaderboard.json to compare this run against. Exits 1 if "
+            "any number moved (§16.1's nightly job). Environment, backend and "
+            "glotscope_version are reported rather than compared, so a release "
+            "does not invalidate a published board"
+        ),
+    )
+    leaderboard.add_argument(
+        "--check-tiers",
+        default=",".join(ALL_TIERS),
+        help=(
+            "which tier blocks this run actually recomputed, for --check. The "
+            "nightly job runs anonymously where the corpus is gated and can "
+            "regenerate tier0 alone; comparing a tier nothing measured would "
+            "report a column as unchanged when nothing looked at it"
+        ),
+    )
     leaderboard.add_argument(
         "--corpus-root",
         default=".",
@@ -789,23 +819,50 @@ def _leaderboard(args: argparse.Namespace) -> int:
     on the numbers alone — key order drifting between runs would make every
     night a diff and the nightly check useless.
     """
-    config = load_config(args.config)
-    board = run_leaderboard(config, corpus_root=args.corpus_root, top_pct=args.top_pct)
-    document = board.to_dict()
+    if args.out is None and args.check is None:
+        raise ValueError("nothing to do: pass --out to publish a board, --check to re-check one")
 
-    out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "leaderboard.json").write_text(canonical_json(document) + "\n", encoding="utf-8")
-    (out / "leaderboard.md").write_text(render_markdown(document), encoding="utf-8")
+    config = load_config(args.config)
+    tiers = tuple(tier.strip() for tier in args.check_tiers.split(",") if tier.strip())
+    # A run asked only to re-check Tier 0 reads no corpus at all — which is what
+    # lets the nightly job run where FLORES+ is gated. Publishing a board still
+    # computes everything.
+    computed = ALL_TIERS if args.out is not None else tiers
+    board = run_leaderboard(
+        config, corpus_root=args.corpus_root, top_pct=args.top_pct, tiers=computed
+    )
+    document = board.to_dict()
 
     for row in board.rows:
         if row.skipped is not None:
             print(f"warning: {row.entry.display} skipped — {row.skipped}", file=sys.stderr)
+
+    if args.out is not None:
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "leaderboard.json").write_text(canonical_json(document) + "\n", encoding="utf-8")
+        (out / "leaderboard.md").write_text(render_markdown(document), encoding="utf-8")
+        print(f"{board.published} published, {board.skipped} skipped -> {out}", file=sys.stderr)
+
+    if args.check is None:
+        return 0
+
+    published = json.loads(Path(args.check).read_text(encoding="utf-8"))
+    differences = check_board(published, document, tiers=tiers)
+    if not differences:
+        print(f"{args.check}: {len(document['rows'])} rows unchanged", file=sys.stderr)
+        return 0
+
+    # Every difference, not the first: naming one moved number would send
+    # someone to fix it and hide the other four.
     print(
-        f"{board.published} published, {board.skipped} skipped -> {out}",
+        f"{args.check}: {len(differences)} published "
+        f"{'numbers have' if len(differences) > 1 else 'number has'} moved",
         file=sys.stderr,
     )
-    return 0
+    for difference in differences:
+        print(f"  {difference}", file=sys.stderr)
+    return _REFUSED
 
 
 def _compare(args: argparse.Namespace) -> int:
