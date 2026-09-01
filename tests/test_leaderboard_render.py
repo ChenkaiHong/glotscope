@@ -109,6 +109,33 @@ def test_a_skipped_row_appears_with_its_reason_and_no_numbers() -> None:
     assert "HF_TOKEN" in table
 
 
+def test_a_multi_line_skip_reason_stays_in_one_table_row() -> None:
+    """A Hub 404 embeds a blank line in its message. Spliced into a cell as it
+    came, it terminated the CommonMark table, and every row after it rendered
+    as loose paragraphs — which is what the first published board did for its
+    three SentencePiece-only rows."""
+    board = _Board(
+        (
+            LeaderboardRow(
+                entry=RosterEntry(id="google/mt5-base", revision="c" * 40),
+                skipped=(
+                    "TokenizerLoadError: 404 (Request ID: Root=1-abc)\n\n"
+                    "Entry Not Found for url: x | y"
+                ),
+            ),
+        )
+    )
+
+    table = render_markdown(board.to_dict())
+
+    row = next(line for line in table.splitlines() if "mt5-base" in line)
+    assert row.startswith("| ") and row.endswith(" |")
+    assert "Entry Not Found" in row
+    # The pipe inside the reason is escaped, so the row still has its eight
+    # columns rather than a ninth.
+    assert len(row.split(" | ")) == 8
+
+
 def test_a_mirror_row_is_visibly_labelled() -> None:
     """§11: a leaderboard silently using unofficial re-uploads is a line of
     attack, so the label has to be in the rendered table and not only in the

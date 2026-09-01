@@ -14,6 +14,8 @@ from dataclasses import replace
 
 from glotscope import __version__, backend
 from glotscope.corpus import LoadedCorpus
+from glotscope.detect import AGREEMENT_THRESHOLD
+from glotscope.embeddings import Embeddings
 from glotscope.enums import (
     MorphologicalType,
     Normalization,
@@ -25,7 +27,7 @@ from glotscope.report import Report
 from glotscope.results import CorpusMetrics
 from glotscope.tokenizer import Tokenizer
 
-__all__ = ["build_report"]
+__all__ = ["attach_tier2", "build_report"]
 
 
 def build_report(
@@ -95,4 +97,69 @@ def build_report(
             corpus=tier1.corpus,
         ),
         warnings=tokenizer.warnings,
+    )
+
+
+def attach_tier2(
+    report: Report,
+    tokenizer: Tokenizer,
+    embeddings: Embeddings,
+    *,
+    top_pct: float,
+    remove_first_pc: bool = False,
+) -> Report:
+    """Run §7.9 over ``embeddings`` and add the result to ``report``, with the
+    provenance that makes it a Tier 2 document. One code path, used by
+    ``detect``, the leaderboard and ``verify``.
+
+    Three things change beside the ``tier2`` block, and all three are what a
+    reader — or ``verify`` — needs to know which measurement this was:
+
+    * ``manifest.weights`` identifies the checkpoint by shard digest and dtype.
+      Without it the document carries Tier 2 numbers and no record of what they
+      were read from, which §9 forbids.
+    * ``manifest.parameters`` gains §7.9's five recorded choices — ``top_pct``,
+      the agreement threshold, both candidate counts, whether the first PC was
+      removed. ``verify`` regenerates from exactly these.
+    * ``manifest.tokenizer.embedding_rows`` is filled in, and the load-time
+      warning that called it unknown is replaced: the rows have now been read.
+
+    The leaderboard once rebuilt the report with ``tier2`` set and the Tier 1
+    manifest unchanged, which published rows none of that was true of. Whatever
+    ``report`` already carries — Tier 1 and its corpus block, for a leaderboard
+    row — is kept: those numbers rest on that corpus, and a document that
+    dropped the block would say less than the run did.
+
+    ``report.warnings`` is expected to be the tokenizer's own — which is what
+    :func:`build_report` and ``detect`` put there; Tier 1 and Tier 2 carry
+    theirs on their own blocks and :meth:`Report.to_dict` aggregates.
+    """
+    tier2 = tokenizer.detect_undertrained(
+        embeddings,
+        top_pct=top_pct,
+        remove_first_pc=remove_first_pc,
+    )
+    tokenizer_manifest, warnings = tokenizer.with_weights(embedding_rows=embeddings.n_rows)
+    return Report(
+        tier0=report.tier0,
+        tier1=report.tier1,
+        tier2=tier2,
+        manifest=replace(
+            report.manifest,
+            tokenizer=tokenizer_manifest,
+            weights=embeddings.manifest,
+            parameters=replace(
+                report.manifest.parameters,
+                top_pct=top_pct,
+                # §7.9 requires LOW_CONFIDENCE "when they disagree beyond
+                # threshold" and fixes no value, so the verdict is unreadable
+                # without the line it was measured against: a HIGH from a run at
+                # 0.7 says something different from a HIGH at 0.3.
+                agreement_threshold=AGREEMENT_THRESHOLD,
+                candidates_pre_exclusion=tier2.candidates_pre_exclusion,
+                candidates_post_exclusion=tier2.candidates_post_exclusion,
+                first_pc_removed=tier2.first_pc_removed,
+            ),
+        ),
+        warnings=warnings,
     )

@@ -272,3 +272,61 @@ def test_a_row_with_weights_is_measured_at_tier_2(
     assert row.tier2_status == "measured"
     assert row.result is not None
     assert "tier2" in row.result
+    # The row rests on a checkpoint, so its manifest must say which one and
+    # under what §7.9 parameters — the same block `detect` writes. A row that
+    # carried the tier2 numbers with the Tier 1 manifest unchanged published a
+    # measurement with no weights provenance and nothing verify could read.
+    manifest = row.result["manifest"]
+    assert manifest["weights"]["shard_sha256"] == "f" * 64
+    assert manifest["tokenizer"]["embedding_rows"] == rows
+    parameters = manifest["parameters"]
+    assert parameters["top_pct"] == 2.0
+    assert parameters["agreement_threshold"] is not None
+    assert parameters["first_pc_removed"] is False
+    assert parameters["candidates_pre_exclusion"] == row.result["tier2"]["candidates_pre_exclusion"]
+    assert (
+        parameters["candidates_post_exclusion"] == row.result["tier2"]["candidates_post_exclusion"]
+    )
+
+
+def test_a_tier_2_row_verifies_with_the_inputs_that_produced_it(
+    tmp_path: Path, toy_encoding: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A row spanning Tier 1 and Tier 2 is a §9 document like any other, and G4
+    says every one regenerates. Its weights are pinned by hash in the manifest,
+    so ``verify`` is handed the same file and checks it before recomputing."""
+    import numpy as np
+
+    from _safetensors import f32, write_safetensors
+    from glotscope.cli import main
+    from glotscope.manifest import canonical_json
+
+    root = _corpus_root(tmp_path)
+    rows = 258
+    scale = np.arange(1, rows + 1, dtype=np.float32).reshape(rows, 1)
+    weights = write_safetensors(
+        tmp_path / "model.safetensors",
+        {"wte.weight": f32(scale * np.full((rows, 4), 0.5))},
+    )
+    config = _config(tmp_path, [{"id": "tiktoken:toy", "weights": str(weights)}])
+    row = run_leaderboard(config, corpus_root=root).rows[0]
+    assert row.skipped is None, row.skipped
+    assert row.result is not None
+    result = tmp_path / "row.json"
+    result.write_text(canonical_json(row.result) + "\n", encoding="utf-8")
+
+    exit_code = main(
+        [
+            "verify",
+            str(result),
+            "--tokenizer",
+            "tiktoken:toy",
+            "--weights",
+            str(weights),
+            "--corpus-root",
+            str(root),
+        ]
+    )
+
+    assert exit_code == 0, capsys.readouterr().err
+    assert "reproduced" in capsys.readouterr().out

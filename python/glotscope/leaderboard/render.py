@@ -114,12 +114,27 @@ def _row_cells(row: Mapping[str, Any]) -> list[str]:
     ]
 
 
+def _cell(text: str) -> str:
+    """One cell's text, made safe to sit in a table row.
+
+    A CommonMark table row is one line, and a pipe starts a new column. Neither
+    is guaranteed of what reaches a cell: a skipped row carries the exception
+    text that skipped it, and a Hub 404 embeds a blank line in that text — which
+    ended the table on the first published board and left the rows after it as
+    loose paragraphs. The ``note`` field is free text from ``leaderboard.yaml``
+    and could carry a pipe just as easily. Newlines become spaces and pipes are
+    escaped; nothing is dropped, so the reason is still there to read.
+    """
+    flattened = " ".join(text.replace("\r\n", "\n").replace("\r", "\n").split("\n"))
+    return flattened.replace("|", "\\|")
+
+
 def _table(rows: Sequence[Mapping[str, Any]]) -> list[str]:
     lines = [
         "| " + " | ".join(_COLUMNS) + " |",
         "|" + "|".join("---" for _ in _COLUMNS) + "|",
     ]
-    lines.extend("| " + " | ".join(_row_cells(row)) + " |" for row in rows)
+    lines.extend("| " + " | ".join(_cell(cell) for cell in _row_cells(row)) + " |" for row in rows)
     return lines
 
 

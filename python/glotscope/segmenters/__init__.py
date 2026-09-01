@@ -35,7 +35,7 @@ from glotscope.segmenters.gold import UdGoldSegmenter
 from glotscope.segmenters.southeast_asian import load_khmer_nltk, load_pythainlp
 from glotscope.segmenters.trained import load_stanza, load_udpipe
 
-__all__ = ["WordSegmenter", "available", "get_segmenter"]
+__all__ = ["WordSegmenter", "available", "get_segmenter", "requires_model"]
 
 
 @runtime_checkable
@@ -94,6 +94,17 @@ caller is told the feature is unbuilt rather than sent to install an extra that
 would not help. Empty since Stanza and UDPipe landed — kept because the
 distinction between *unbuilt* and *unavailable* is part of the interface, and
 the next scheduled adapter should reuse it rather than reinvent it."""
+
+
+def requires_model(segmenter: Segmenter) -> bool:
+    """Whether ``segmenter`` needs a pinned model file to be built.
+
+    True for the trained adapters and nothing else. Exposed so that a caller
+    reproducing a result — ``verify`` — can ask for the model up front and name
+    the flag that is missing, rather than have the adapter refuse two frames
+    deeper with advice about a Python argument.
+    """
+    return segmenter in _TRAINED
 
 
 def get_segmenter(

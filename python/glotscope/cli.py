@@ -38,7 +38,6 @@ from glotscope import __version__, backend
 from glotscope.compare import METRICS
 from glotscope.compare import compare as compare_results
 from glotscope.corpus import REGISTRY, Corpus
-from glotscope.detect import AGREEMENT_THRESHOLD
 from glotscope.document import load_result
 from glotscope.embeddings import Embeddings
 from glotscope.enums import MorphologicalType, Normalization, RenyiNormalizer, Segmenter
@@ -54,7 +53,10 @@ from glotscope.loading import load_embeddings as _load_embeddings
 from glotscope.loading import load_tokenizer as _load_tokenizer
 from glotscope.manifest import Manifest, ParameterManifest, canonical_json, environment
 from glotscope.report import Report, Tier0Report
+from glotscope.reporting import attach_tier2
 from glotscope.reporting import build_report as _build_report
+from glotscope.segmenters import requires_model
+from glotscope.segmenters.trained import model_digest, recorded_digest, require_model
 from glotscope.tokenizer import Tokenizer
 
 __all__ = ["build_parser", "main"]
@@ -353,6 +355,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     verify.add_argument(
+        "--segmenter-model",
+        default=None,
+        help=(
+            "the trained model the result's segmenter ran with, for a document "
+            "computed under stanza or udpipe. Required for the same reason "
+            "--tokenizer is: §9 keeps filesystem paths out of the manifest, so "
+            "the document records what the model is (a SHA-256) but not where "
+            "it lives. The digest is checked against the manifest before "
+            "anything is recomputed."
+        ),
+    )
+    verify.add_argument(
         "--corpus-root",
         default=".",
         help="directory holding the downloaded corpora; the library ships none (D12)",
@@ -481,6 +495,9 @@ def _detect_report(
     reason: a verify that assembled the document its own way would be comparing
     a published result against a second implementation rather than regenerating
     it, and the two could drift apart without either being wrong on its own.
+    The Tier 2 half of the assembly is :func:`attach_tier2`, shared with the
+    leaderboard so that a board row and a ``detect`` document carry the same
+    provenance for the same measurement.
 
     No corpus block: Tier 2 reads weights and needs no text, so the manifest
     omits the corpus rather than writing nulls into it — §9's nesting is what a
@@ -495,39 +512,27 @@ def _detect_report(
     ``tier0`` is passed in rather than re-linted, because the caller has already
     computed it to size the embedding read.
     """
-    tier2 = tokenizer.detect_undertrained(
-        embeddings,
-        top_pct=top_pct,
-        remove_first_pc=remove_first_pc,
-    )
-    # The weights have been read, so `embedding_rows` is known and the load-time
-    # warning that called it unknown is no longer true of this document.
-    tokenizer_manifest, warnings = tokenizer.with_weights(embedding_rows=embeddings.n_rows)
-    return Report(
+    tier0_only = Report(
         tier0=tier0,
-        tier2=tier2,
         manifest=Manifest(
-            tokenizer=tokenizer_manifest,
+            tokenizer=tokenizer.manifest,
             parameters=ParameterManifest(
                 leading_space=False,
                 normalization=Normalization.NONE,
                 add_special_tokens=False,
-                top_pct=top_pct,
-                # §7.9 requires LOW_CONFIDENCE "when they disagree beyond
-                # threshold" and fixes no value, so the verdict is unreadable
-                # without the line it was measured against: a HIGH from a run at
-                # 0.7 says something different from a HIGH at 0.3.
-                agreement_threshold=AGREEMENT_THRESHOLD,
-                candidates_pre_exclusion=tier2.candidates_pre_exclusion,
-                candidates_post_exclusion=tier2.candidates_post_exclusion,
-                first_pc_removed=tier2.first_pc_removed,
             ),
             environment=environment(),
             backend=backend(),
             glotscope_version=__version__,
-            weights=embeddings.manifest,
         ),
-        warnings=warnings,
+        warnings=tokenizer.warnings,
+    )
+    return attach_tier2(
+        tier0_only,
+        tokenizer,
+        embeddings,
+        top_pct=top_pct,
+        remove_first_pc=remove_first_pc,
     )
 
 
@@ -670,43 +675,50 @@ def _regenerate(
 ) -> Report:
     """Re-run whichever tiers the committed document declares.
 
+    A document carrying a corpus block and a tier2 block is a leaderboard row —
+    Tier 1 over the corpus, then Tier 2 over the row's weights — and is
+    regenerated the way it was produced: the Tier 1 report first, the Tier 2
+    result attached to it. ``detect`` writes no corpus block and ``analyze`` no
+    tier2 block, so each of those is one half of the same path.
+
     Raises:
-        ValueError: for a document no subcommand writes — one carrying both a
-            corpus and a tier2 block, or neither. The first cannot be
-            regenerated because nothing produces it and there is no single run
-            to reproduce; the second is a ``lint`` document, which has no
-            recomputed numbers to compare.
+        ValueError: for a document carrying neither. That is a ``lint``
+            document, which has no recomputed numbers to compare.
     """
     has_corpus = "corpus" in manifest
     has_tier2 = "tier2" in committed
-    if has_corpus and has_tier2:
+    if not has_corpus and not has_tier2:
         raise ValueError(
-            f"{args.result!r} carries both a corpus and a tier2 block, and no "
-            f"subcommand writes that: `analyze` produces Tier 1 and `detect` "
-            f"produces Tier 2. Regenerating it would mean inventing a single run "
-            f"that never happened."
+            f"{args.result!r} carries neither a corpus nor a tier2 block, so it "
+            f"records no recomputed numbers. `glotscope lint` writes that document; "
+            f"verify expects one from `analyze`, `detect` or `leaderboard`."
         )
-    if has_tier2:
+    if not has_corpus:
         return _regenerate_detect(args, manifest, tokenizer)
-    if has_corpus:
-        return _regenerate_analyze(args, committed, manifest, tokenizer)
-    raise ValueError(
-        f"{args.result!r} carries neither a corpus nor a tier2 block, so it "
-        f"records no recomputed numbers. `glotscope lint` writes that document; "
-        f"verify expects one from `analyze` or `detect`."
+    report = _regenerate_analyze(args, committed, manifest, tokenizer)
+    if not has_tier2:
+        return report
+    parameters = manifest["parameters"]
+    embeddings = _pinned_embeddings(args, manifest, vocab_size=report.tier0.vocab_size)
+    return attach_tier2(
+        report,
+        tokenizer,
+        embeddings,
+        top_pct=parameters["top_pct"],
+        remove_first_pc=parameters["first_pc_removed"],
     )
 
 
-def _regenerate_detect(
-    args: argparse.Namespace,
-    manifest: Mapping[str, Any],
-    tokenizer: Tokenizer,
-) -> Report:
-    """Re-run Tier 0 + Tier 2 from the recorded parameters (§7.9, G4).
+def _pinned_embeddings(
+    args: argparse.Namespace, manifest: Mapping[str, Any], *, vocab_size: int
+) -> Embeddings:
+    """The weights ``--weights`` names, once they are known to be the ones the
+    manifest pins.
 
     Raises:
-        ValueError: if ``--weights`` was not supplied, or if the supplied
-            checkpoint is not the one the manifest pins.
+        ValueError: if ``--weights`` was not supplied, if the document carries
+            no weights manifest to check against, or if the supplied checkpoint
+            is not the one the manifest pins.
     """
     if args.weights is None:
         raise ValueError(
@@ -720,13 +732,10 @@ def _regenerate_detect(
         raise ValueError(
             f"{args.result!r} carries a tier2 block and no weights manifest, so "
             f"the checkpoint it describes cannot be identified. It was not "
-            f"written by `glotscope detect`."
+            f"written by `glotscope detect` or `glotscope leaderboard`."
         )
-
-    parameters = manifest["parameters"]
-    tier0 = tokenizer.lint()
     embeddings = _load_embeddings(
-        args.weights, vocab_size=tier0.vocab_size, revision=args.weights_revision
+        args.weights, vocab_size=vocab_size, revision=args.weights_revision
     )
     # The same rule the tokenizer follows two frames up: identity is checked
     # before anything is recomputed, so the wrong checkpoint fails on what it is
@@ -737,6 +746,18 @@ def _regenerate_detect(
             f"match the {weights_block['shard_sha256']} this result was produced "
             f"with. The manifest pins the artifact by hash and by nothing else."
         )
+    return embeddings
+
+
+def _regenerate_detect(
+    args: argparse.Namespace,
+    manifest: Mapping[str, Any],
+    tokenizer: Tokenizer,
+) -> Report:
+    """Re-run Tier 0 + Tier 2 from the recorded parameters (§7.9, G4)."""
+    parameters = manifest["parameters"]
+    tier0 = tokenizer.lint()
+    embeddings = _pinned_embeddings(args, manifest, vocab_size=tier0.vocab_size)
     return _detect_report(
         tokenizer,
         tier0,
@@ -744,6 +765,43 @@ def _regenerate_detect(
         top_pct=parameters["top_pct"],
         remove_first_pc=parameters["first_pc_removed"],
     )
+
+
+def _pinned_segmenter_model(
+    args: argparse.Namespace,
+    segmenter: Segmenter | None,
+    recorded: Mapping[str, str] | None,
+) -> str | None:
+    """``--segmenter-model``, once it is known to be the model the manifest
+    records — or ``None`` for a segmenter that has no model to pin.
+
+    Raises:
+        ValueError: if the document was computed under a trained segmenter and
+            no model was supplied, or the one supplied is not the one recorded.
+        FileNotFoundError: if the path names nothing.
+    """
+    if segmenter is None or not requires_model(segmenter):
+        return None
+    if args.segmenter_model is None:
+        raise ValueError(
+            f"{args.result!r} was computed under {segmenter.value}, so "
+            f"regenerating it needs the model it ran with — pass "
+            f"--segmenter-model, exactly as --tokenizer is passed. §9 keeps "
+            f"filesystem paths out of the manifest: it records what the model "
+            f"is (a SHA-256), not where it lives."
+        )
+    path = require_model(segmenter, args.segmenter_model)
+    digest = model_digest(path)
+    for language, version in (recorded or {}).items():
+        expected = recorded_digest(version)
+        if expected is not None and expected != digest:
+            raise ValueError(
+                f"{args.segmenter_model}: sha256 {digest} does not match the "
+                f"{expected} the {language} boundaries in this result were "
+                f"produced with. The manifest pins the model by hash and by "
+                f"nothing else."
+            )
+    return str(path)
 
 
 def _regenerate_analyze(
@@ -764,7 +822,12 @@ def _regenerate_analyze(
         sha256=corpus_block["sha256"],
     )
     loaded = corpus.load(args.corpus_root, license_filter=args.license_filter)
-    segmenter = parameters.get("segmenter")
+    segmenter = Segmenter(parameters["segmenter"]) if parameters.get("segmenter") else None
+    # Checked before the corpus is encoded, like the tokenizer and the weights:
+    # a wrong model fails on what it is, not on the boundaries it produces.
+    segmenter_model = _pinned_segmenter_model(
+        args, segmenter, parameters.get("segmenter_model_versions")
+    )
     # §7.7's three recorded parameters are published in the per-language
     # morphology block rather than in ParameterManifest, so they are read from
     # where the value actually is — the same rule this function already follows
@@ -790,7 +853,8 @@ def _regenerate_analyze(
         leading_space=parameters["leading_space"],
         normalization=Normalization(parameters["normalization"]),
         add_special_tokens=parameters["add_special_tokens"],
-        segmenter=Segmenter(segmenter) if segmenter is not None else None,
+        segmenter=segmenter,
+        segmenter_model=segmenter_model,
         # Which corpus-level metrics ran is read off the document rather than
         # asked for again: a verify that skipped them would pass a file whose
         # gini or renyi no longer reproduces.

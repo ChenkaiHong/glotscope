@@ -28,13 +28,16 @@ from pathlib import Path
 from typing import Any
 
 from glotscope.enums import Segmenter
-from glotscope.segmenters._support import import_or_refuse, language_prefix, package_version
+from glotscope.segmenters._support import import_or_refuse, package_version
+from glotscope.segmenters.stanza_languages import stanza_language
 
 __all__ = [
     "StanzaSegmenter",
     "UdpipeSegmenter",
     "load_stanza",
     "load_udpipe",
+    "model_digest",
+    "recorded_digest",
     "require_model",
 ]
 
@@ -67,7 +70,9 @@ def require_model(segmenter: Segmenter, model: str | Path | None) -> Path:
     return path
 
 
-def _digest(path: Path) -> str:
+def model_digest(path: Path) -> str:
+    """SHA-256 of the model file, streamed: a Stanza model is hundreds of
+    megabytes and a UDPipe one is not small either."""
     hasher = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
@@ -75,8 +80,24 @@ def _digest(path: Path) -> str:
     return hasher.hexdigest()
 
 
+_DIGEST_MARKER = "sha256:"
+
+
 def _model_version(package: str, version: str, path: Path) -> str:
-    return f"{package} {version}, model {path.name} sha256:{_digest(path)}"
+    return f"{package} {version}, model {path.name} {_DIGEST_MARKER}{model_digest(path)}"
+
+
+def recorded_digest(model_version: str) -> str | None:
+    """The digest a recorded model version carries, or ``None`` if it has none.
+
+    The inverse of the string these adapters write, kept beside it so the two
+    cannot drift apart. ``verify`` reads this out of a manifest to check the
+    model it was handed *before* recomputing anything — the same rule the
+    tokenizer and the weights already follow: identity fails on what the
+    artifact is, not by producing different numbers and blaming the result.
+    """
+    _, marker, digest = model_version.rpartition(_DIGEST_MARKER)
+    return digest if marker else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +189,16 @@ def load_stanza(language: str, model: str | Path | None = None) -> StanzaSegment
     fetches whatever its resources file points at, and the manifest would record
     a model this process never chose.
 
+    ``lang`` is what Stanza calls the language, resolved through
+    :func:`stanza_language` rather than truncated from the corpus code: Stanza
+    keys its resources by ISO 639-1, and the first two letters of an ISO 639-3
+    code are not that — ``spa`` is ``es``, ``jpn`` is ``ja``. Stanza reads the
+    code to find the language's resources entry, not to tokenize; the pinned
+    model does that. For a language whose default package pairs the tokenizer
+    with a multi-word-token expander, Stanza also loads that expander from its
+    resources directory; it changes the words a sentence is split into, never
+    the surface tokens this adapter reads.
+
     Raises:
         ValueError: if no model was given.
         FileNotFoundError: if the path names nothing.
@@ -177,7 +208,7 @@ def load_stanza(language: str, model: str | Path | None = None) -> StanzaSegment
     stanza = import_or_refuse(Segmenter.STANZA, "stanza", "stanza")
 
     pipeline = stanza.Pipeline(
-        lang=language_prefix(language)[:2],
+        lang=stanza_language(language),
         processors="tokenize",
         tokenize_model_path=str(path),
         download_method=None,

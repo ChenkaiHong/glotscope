@@ -32,7 +32,7 @@ from glotscope.leaderboard.config import LeaderboardConfig, RosterEntry
 from glotscope.loading import load_embeddings, load_tokenizer
 from glotscope.manifest import Manifest, ParameterManifest, environment
 from glotscope.report import Report
-from glotscope.reporting import build_report
+from glotscope.reporting import attach_tier2, build_report
 from glotscope.tokenizer import Tokenizer
 
 __all__ = ["LeaderboardDocument", "LeaderboardRow", "run_leaderboard"]
@@ -135,15 +135,15 @@ class LeaderboardDocument:
         }
 
 
-def _tier2(tokenizer: Tokenizer, entry: RosterEntry, *, top_pct: float) -> Any:
+def _embeddings(tokenizer: Tokenizer, entry: RosterEntry) -> Embeddings | None:
+    """The row's weights, read — or ``None`` for a tokenizer-only row."""
     if entry.weights is None:
         return None
-    embeddings: Embeddings = load_embeddings(
+    return load_embeddings(
         entry.weights,
         vocab_size=tokenizer.manifest.vocab_size_tokenizer,
         revision=entry.weights_revision,
     )
-    return tokenizer.detect_undertrained(embeddings, top_pct=top_pct)
 
 
 def _tier0_only(tokenizer: Tokenizer, config: LeaderboardConfig) -> Report:
@@ -199,20 +199,18 @@ def _run_row(
             renyi_normalizer=config.parameters.renyi_normalizer,
             nominal_vocab_size=config.parameters.nominal_vocab_size,
         )
-        tier2 = _tier2(tokenizer, entry, top_pct=top_pct)
+        embeddings = _embeddings(tokenizer, entry)
+        if embeddings is not None:
+            # The same assembly `detect` uses, so the row carries the weights
+            # manifest and §7.9's parameters beside its tier2 block — not the
+            # Tier 1 manifest with a tier2 block bolted on, which is what it
+            # carried before and what verify could not read.
+            report = attach_tier2(report, tokenizer, embeddings, top_pct=top_pct)
     except _UNREACHABLE as exc:
         # Skipped, with the reason the row is missing. §11 requires the run to
         # continue; it does not permit the output to be silent about the gap.
         return LeaderboardRow(entry=entry, skipped=f"{type(exc).__name__}: {exc}")
 
-    if tier2 is not None:
-        report = Report(
-            tier0=report.tier0,
-            tier1=report.tier1,
-            tier2=tier2,
-            manifest=report.manifest,
-            warnings=report.warnings,
-        )
     return LeaderboardRow(entry=entry, result=report.to_dict())
 
 
