@@ -57,7 +57,7 @@ U1..U5 (blocking unknowns)
        ├─ Tier 0                      <- no external data; start here
        │    ├─ utf8.py    three disjoint classes; hand-built vocab test        [done]
        │    ├─ lint.py    unreachable, byte-fallback coverage, family classifier [done]
-       │    └─ Tokenizer.from_file [done] / from_tiktoken / from_pretrained + manifest
+       │    └─ Tokenizer.from_file / from_pretrained / from_tiktoken + manifest        [done]
        │
        ├─ Tier 1 segmenter-free       <- needs FLORES+ (gated: HF_TOKEN or vendored subset)
        │    ├─ compression.py   CPT/BPT/CTC + CR (U1 resolved)
@@ -101,6 +101,14 @@ Completed in the original value-per-unit-of-blocked-ness order:
    blank-text exclusion, and ratio-of-totals against mean-of-per-document-ratios — and the corpus was
    chosen so at least one language separates each.
 
+6. **Petrov's Shan premium** (§12.1, tolerance +/-10%). The row §12.1 flags as ambiguous, because
+   the source never states which aggregation it used. Both were computed: the ratio of means gives
+   18.689 (GPT-2) and 14.979 (cl100k) against the published 18.76 and 15.05, and the mean of
+   per-document ratios gives 19.115 and 15.329. Both land inside the tolerance, so the row passes
+   either way — but the ratio of means is four to five times closer on both tokenizers, which is
+   independent evidence for D7 rather than a restatement of it. Blocked on FLORES+ until the corpus
+   was fetched on 29 August 2026.
+
 The PyPI name was reserved on 10 August 2026.
 
 ## Cut order under schedule pressure
@@ -110,8 +118,8 @@ are never cut. The package ships at M1 (**Fri 18 Sep 2026**), before the paper a
 
 ## Not yet written
 
-- The two load-bearing CI jobs are not yet written: `glotscope verify` against a committed
-  `result.json`, and the nightly leaderboard re-run that fails if any published number moves. The
+- One load-bearing CI job remains: the nightly leaderboard re-run that fails if any published number
+  moves. `glotscope verify` against a committed `result.json` is **done** and runs on every cell. The
   3.10–3.13 × {ubuntu, macos, windows} quality matrix is implemented and green.
 - `leaderboard.yaml`, `results/` — M3.
 - Tier metric packages (`tier0/`, `tier1/`, `tier2/`) — deliberately not stubbed. The contracts are

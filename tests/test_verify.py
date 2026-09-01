@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -312,3 +313,56 @@ def test_the_wrong_weights_fail_on_identity_not_on_the_numbers(
 
     assert exit_code == 1
     assert "shard_sha256" in capsys.readouterr().err
+
+
+# -- results computed under a trained segmenter ------------------------------
+
+
+def _produce_udpipe(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Run ``analyze`` under UDPipe, returning the tokenizer, the model and the
+    result."""
+    model = tmp_path / "english.udpipe"
+    model.write_bytes(b"not a real model, but a real file with a real digest")
+    tokenizer, result = _produce(tmp_path, "--segmenter", "udpipe", "--segmenter-model", str(model))
+    return tokenizer, model, result
+
+
+def test_a_result_under_a_trained_segmenter_verifies_with_its_model(
+    tmp_path: Path, fake_udpipe: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Stanza and UDPipe refuse to run without a pinned model, so a verify that
+    # did not forward one could regenerate nothing computed under them — the
+    # very metrics the adapters were added to enable fell outside G4.
+    tokenizer, model, result = _produce_udpipe(tmp_path)
+
+    exit_code = main([*_verify(tokenizer, result, tmp_path), "--segmenter-model", str(model)])
+
+    assert exit_code == 0
+    assert "reproduced" in capsys.readouterr().out
+
+
+def test_verifying_such_a_result_without_the_model_names_the_flag(
+    tmp_path: Path, fake_udpipe: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    tokenizer, _, result = _produce_udpipe(tmp_path)
+
+    exit_code = main(_verify(tokenizer, result, tmp_path))
+
+    assert exit_code == 1
+    assert "--segmenter-model" in capsys.readouterr().err
+
+
+def test_the_wrong_segmenter_model_fails_on_identity_not_on_the_numbers(
+    tmp_path: Path, fake_udpipe: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The manifest records the model by digest and by nothing else, so a
+    # different file must fail before anything is recomputed — the same rule
+    # --tokenizer and --weights already follow.
+    tokenizer, _, result = _produce_udpipe(tmp_path)
+    other = tmp_path / "other.udpipe"
+    other.write_bytes(b"a different file with a different digest")
+
+    exit_code = main([*_verify(tokenizer, result, tmp_path), "--segmenter-model", str(other)])
+
+    assert exit_code == 1
+    assert "sha256" in capsys.readouterr().err

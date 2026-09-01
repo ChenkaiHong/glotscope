@@ -1,0 +1,73 @@
+# The nightly leaderboard re-run (PRD §12.3, §16.1).
+#
+# The second of the two load-bearing CI jobs. `glotscope verify` — the first —
+# proves one published result still regenerates; this proves the *published
+# board* still does, against artifacts nobody here controls.
+#
+# Pinning the revisions does not make this redundant. A tiktoken encoding is
+# pinned by the installed library version rather than by content, a repository
+# can be deleted or newly gated under a revision that still resolves, and our own
+# code can change a number without anyone noticing.
+#
+# **Tier 0 only, for now.** FLORES+ is gated, so an anonymous runner cannot
+# compute the Tier 1 columns. Rather than skip the job until a token exists, it
+# re-checks what it *can* recompute — vocabulary size, ill-formed rate,
+# unreachable ids, byte-fallback coverage — and says so in its own name. That is
+# the half that catches an encoding changing under us. To upgrade to the whole
+# board: add an HF_TOKEN secret, restore the corpus, and drop --check-tiers.
+name: Nightly leaderboard
+
+on:
+  schedule:
+    # 04:00 UTC. Late enough that a Hub change during a working day is caught
+    # the same night, early enough that a red job is waiting in the morning.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recheck:
+    name: Tier 0 against the published board
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.3"
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Create environment
+        run: uv venv --python 3.13
+
+      - name: Install project
+        run: uv pip install --editable ".[tiktoken,leaderboard]"
+
+      # The corpus is not shipped (D12) and FLORES+ is gated, so the Tier 1
+      # columns cannot be recomputed here. The published board's own corpus
+      # digest is what a future full run will check against.
+      - name: Re-check the published board
+        run: >
+          uv run --no-sync glotscope leaderboard
+          --config leaderboard.yaml
+          --check results/leaderboard.json
+          --check-tiers tier0
+          --corpus-root .
+
+      - name: Explain a failure
+        if: failure()
+        run: >
+          echo "A published Tier 0 number moved, or a row stopped publishing.
+          Neither is automatically a bug: an upstream repository may have been
+          gated or deleted, or tiktoken may have shipped a changed encoding.
+          Investigate before regenerating — the board is the record, and
+          regenerating it to make this green would erase the evidence."

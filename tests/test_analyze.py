@@ -231,13 +231,18 @@ def test_ud_gold_is_refused_on_a_corpus_without_gold_word_boundaries(tmp_path: P
         _tokenizer(tmp_path).analyze(_parallel(tmp_path), segmenter=Segmenter.UD_GOLD)
 
 
-def test_a_segmenter_that_cannot_run_yet_is_refused_rather_than_recorded(tmp_path: Path) -> None:
-    # Stanza and UDPipe segment with a downloaded model, and how that model is
-    # pinned and recorded is undecided — a silent download on first use would
-    # put an unrecorded artifact behind a published number. Recording a
-    # segmenter that never ran would be a false claim in the manifest, and an
-    # empty fertility mapping the silently-plausible wrong answer D6 prevents.
-    with pytest.raises(NotImplementedError, match="explicit local path"):
+def test_a_trained_segmenter_without_its_model_is_refused_rather_than_recorded(
+    tmp_path: Path,
+) -> None:
+    # Stanza and UDPipe are built now, and the decision they were waiting on is
+    # made: the model is an explicit path the caller pins, never a download on
+    # first use, which would put an unrecorded artifact behind a published
+    # number. So this is a ValueError naming the missing input rather than a
+    # NotImplementedError — the adapter exists; the model is the caller's.
+    # Recording a segmenter that never ran would be a false claim in the
+    # manifest, and an empty fertility mapping the silently-plausible wrong
+    # answer D6 prevents.
+    with pytest.raises(ValueError, match="model"):
         _tokenizer(tmp_path).analyze(_parallel(tmp_path), segmenter=Segmenter.STANZA)
 
 
