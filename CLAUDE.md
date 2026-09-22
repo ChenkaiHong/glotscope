@@ -23,7 +23,7 @@ uv run --no-sync mypy --strict python/glotscope tests
 uv run --no-sync pytest --cov=glotscope --cov-report=term-missing -q   # gate: 85%
 ```
 
-Baseline as of 16 Aug 2026: **280 tests pass, 97.13% coverage** (264 + 16 skipped without the segmenter extras), ruff/format/mypy clean. Coverage below 85% fails the run, so `--cov` is not optional when judging a change.
+Baseline as of 22 Sep 2026: **674 passed, 1 skipped, 98.41% coverage** on 3.13 with FLORES+ on disk; **659 passed, 16 skipped** on the 3.10 floor; ruff/format/mypy clean. Coverage below 85% fails the run, so `--cov` is not optional when judging a change.
 
 `.[dev]` installs the extras too. The **core install is `tokenizers` alone** — `numpy`/`safetensors` are the `tier2` extra and `tiktoken` is its own, because G1's clean-install promise is measured on a core install that only claims Tier 0 and Tier 1. Import either inside the function that needs it and name the extra when it is missing.
 
@@ -59,27 +59,31 @@ make upload REPOSITORY=pypi     # -> PyPI
 
 `make leak-check` is mandatory after any change to `pyproject.toml` packaging keys. A published sdist cannot be retracted; `include` is an allowlist and `exclude` is a second guard.
 
-## Repository state (14 Aug 2026)
+## Repository state (22 Sep 2026)
 
-M0 is frozen and merged. Git repo with public remote `ChenkaiHong/glotscope`; **the default branch is `foundation`, not `main`** — CI push events trigger on `foundation` and PRs target it. `master` is a stale local branch.
+M0 and M1 are closed and **v0.1.0 is on PyPI** (20 Aug 2026). M2's substance is built; M3 (docs site, HF Space, launch) is the head of the queue. `PROGRESS.md` holds the live Done / Next / Blocked. Git repo with public remote `ChenkaiHong/glotscope`; **the default branch is `foundation`, not `main`** — CI push events trigger on `foundation` and PRs target it. `master` is a stale local branch.
 
-Implemented and tested: `metrics.py` (Rényi, parity, Gini), `utf8.py` (three-class classification + `Tier0Report` assembly), `lint.py` (Tier 0 vocabulary lint), the four `aggregate.py` folds, `compression.py` (CPT/BPT/CTC + CR), `strr.py`, `roundtrip.py`, all three `Tokenizer.from_*` loaders and `analyze` end to end, the contract layer (`enums`/`errors`/`results`/`report`/`manifest`/`corpus`/`tokenizer`/`embeddings`), and `scripts/audit_ud_licenses.py` + `data/ud-license-audit.json` (353 UD 2.18 treebanks; fail-closed README/`LICENSE.txt` agreement — 268 commercial, 31 noncommercial, 54 manual review).
+Implemented and tested: `metrics.py` (Rényi, parity, Gini), `utf8.py` (three-class classification + `Tier0Report` assembly), `lint.py` (Tier 0 vocabulary lint), the four `aggregate.py` folds, `compression.py` (CPT/BPT/CTC + CR), `strr.py`, `roundtrip.py`, all three `Tokenizer.from_*` loaders and `analyze` end to end, Tier 2 (`embeddings`/`reference_set`/`detect`), morphology (`morphology`/`morphynet`/`conllu`), an adapter for every `Segmenter` member, `compare`, `verify`, the leaderboard (`leaderboard/`, `leaderboard.yaml`, `results/`), the contract layer (`enums`/`errors`/`results`/`report`/`manifest`/`corpus`/`tokenizer`/`embeddings`), and `scripts/audit_ud_licenses.py` + `data/ud-license-audit.json` (353 UD 2.18 treebanks; fail-closed README/`LICENSE.txt` agreement — 268 commercial, 31 noncommercial, 54 manual review).
 
-`glotscope lint` and `glotscope analyze` are live and produce a §9 document. **Exit codes are part of the interface**: `0` produced a document, `1` is a typed refusal, `2` is scheduled but not built. A mistyped path is `1`; so is `--revision` beside a local path or a `tiktoken:` encoding, because both loaders exist now and "scheduled for a later release" would send the reader after something already built. Only `leaderboard` still exits `2`.
+All six §8.2 subcommands are live and produce a §9 document. **Exit codes are part of the interface**: `0` produced a document, `1` is a typed refusal, `2` is scheduled but not built. A mistyped path is `1`; so is `--revision` beside a local path or a `tiktoken:` encoding, because both loaders exist now and "scheduled for a later release" would send the reader after something already built. Nothing exits `2` today — `cli._MILESTONES` has been empty since the leaderboard landed — but the code stays reserved for the next subcommand declared before it is built.
 
 **Three loaders, three provenance stories.** `from_file` records `revision="local"`; `from_pretrained` resolves the repo *before* fetching, so the artifact and the recorded SHA are the same commit; `from_tiktoken` has neither a `tokenizer.json` nor a commit, so `tokenizer_json_sha256` is a digest over the encoding's own definition (merge ranks, special tokens, split pattern, vocabulary size — the name deliberately excluded) and `revision` is the pinned `tiktoken` version. An OpenAI encoding reaches Tier 0/1 through `tiktoken_backend.TiktokenBackend`, an adapter presenting the `tokenizers` surface — **not** a conversion, because building a `tokenizers` BPE from `mergeable_ranks` means implementing a tokenizer (§3.2's first non-goal) and a mistranslated split rule shifts every Tier 1 number with nothing to notice it by.
 
-Still `NotImplementedError`: the `leaderboard` handler, and the `STANZA`/`UDPIPE` segmenter adapters. `Report.from_json` is blocked on `Tier0Report.to_dict` being lossy — it drops the partial-UTF-8/unreachable/special id lists. No `tier0/`/`tier1/`/`tier2/` packages — deliberately not stubbed (`docs/build-order.md`); their contracts are already pinned by the `Tier1Report` methods and the `aggregate` boundary.
+Nothing is `NotImplementedError`: `segmenters._UNBUILT` is empty, and `STANZA`/`UDPIPE` segment from a model the caller pins, recorded by the SHA-256 of that file. There is no `Report.from_json` and M3 does not need one — M3 asks for the **manifest** to round-trip, which `Manifest.from_dict` does, asserted against the G4 fixture and every published board row. The tier blocks deliberately do not round-trip (§9 publishes `unreachable_count`, not the ids), and a test pins that absence. No `tier0/`/`tier1/`/`tier2/` packages — deliberately not stubbed (`docs/build-order.md`); their contracts are already pinned by the `Tier1Report` methods and the `aggregate` boundary.
 
 **G4 is closed.** `glotscope verify` regenerates a result from its manifest and compares, and the CI job runs it against the committed `verification/result.json` on **all twelve cells** — so the claim is that a published number reproduces on a different OS and Python, not merely where it was made. The artifact is passed as `--tokenizer` because §9 keeps filesystem paths out of the manifest: the document records what the artifact *is* (a SHA-256), not where it lives, and that hash is checked before anything is recomputed. Environment is excluded from the comparison and printed instead — it is recorded *because* it varies, so demanding it match would make a result verifiable only on the machine that produced it.
 
 `verification/` holds the fixture: four invented sentences under a `verification_fixture` registry entry (CC0), plus the tokenizer and the result. It is the one exception to D12 and an exception in name only — a verification job with no inputs cannot run. Its id is its own rather than borrowed from a real corpus, so the manifest tells the truth about what was measured. `.gitattributes` marks `verification/**` as `-text`, because the digest is over the bytes on disk and a CRLF checkout on Windows would fail the job for a reason unrelated to any number. The fixture sits outside the sdist allowlist, so `tests/test_g4_verification.py` runs from a checkout and skips from an unpacked release.
 
-Not yet written: the nightly leaderboard re-run, `leaderboard.yaml`, `results/`. The 12-cell quality matrix (3.10–3.13 × {ubuntu, macos, windows}) is implemented and green.
+**The leaderboard is built.** `glotscope leaderboard --config leaderboard.yaml --out results/ --corpus-root <root>` regenerates `results/leaderboard.{json,md}` — 13 rows published, 3 SentencePiece-only rows skipped with the §3.2 reason. Regenerate, never hand-edit; `--check results/leaderboard.json` proves a regeneration moved no number. `.github/workflows/nightly.yml` runs that check at 04:00 UTC over **Tier 0 only**, because FLORES+ is gated; upgrading needs an `HF_TOKEN` secret and the corpus restored in the workflow. **Scheduled workflows run only from the default branch**, so a nightly job that exists only on a PR branch has never fired.
+
+No roster row configures `weights:` yet, so the board holds no Tier 2 measurement. The Tier 2 cell says what the board did, never what the model lacks: `n/a (tokenizer-only)` is reserved for `tiktoken:` encodings, and a model row without weights reads `not run (no weights configured)`. The first board printed the tokenizer-only label beside nine models whose weights are published; a test now checks every committed label against the runner.
+
+The 12-cell quality matrix (3.10–3.13 × {ubuntu, macos, windows}) is implemented and green.
 
 Blocking unknowns U1–U5 are **resolved** — evidence in `docs/m0-source-audit.md`, sequencing in `docs/build-order.md`, discrepancies in `docs/divergences.md`. Two PRD items remain `UNVERIFIED` and must not be cited: the gated Command-R / Command-A / Aya Expanse / Gemma 2 vocab sizes, and the Phi-3/3.5 and ByT5 vocab sizes.
 
-PyPI name reserved 10 Aug 2026 with a 0.0.0 placeholder. **v0.1.0 is prepared and not yet uploaded** — `make upload REPOSITORY=pypi` needs Kai's token, and a published sdist cannot be retracted.
+PyPI name reserved 10 Aug 2026 with a 0.0.0 placeholder; **v0.1.0 published 20 Aug 2026**. v0.2.0 is M2's deliverable (window 21 Sep – 16 Oct) and is not yet cut. `make upload REPOSITORY=pypi` needs Kai's token, and a published sdist cannot be retracted.
 
 `verify` compares the **numbers**, not the producer: `glotscope_version` and `backend` are reported rather than compared, because comparing them would make every release invalidate every result published before it. `schema_version` *is* compared — a schema change changes the document. The committed fixture is deliberately left at `0.0.0`, so every CI run asserts that a result published by an earlier release still regenerates.
 
@@ -124,7 +128,7 @@ Anything requiring a forward pass is Tier 3 and out of scope. When a published r
 
 Two CI jobs are load-bearing and easy to forget:
 1. **`glotscope verify` against a committed `result.json`** — from v1, not v2 (§12.3). **Done**: it runs on every cell of the quality matrix against `verification/result.json`.
-2. **Nightly leaderboard re-run against pinned revisions that fails if any published number moves** — silent upstream tokenizer changes are otherwise undetectable.
+2. **Nightly leaderboard re-run against pinned revisions that fails if any published number moves** — silent upstream tokenizer changes are otherwise undetectable. **Written** (`nightly.yml`); it re-checks Tier 0 only until the runner can read FLORES+.
 
 Extras: all segmenters are optional (`pip install glotscope[segmenters]`). MeCab needs a native build, PyICU needs system ICU. G1 promises green Windows CI for the **core install only**; segmenter tests skip-with-message.
 
@@ -149,6 +153,14 @@ Extras: all segmenters are optional (`pip install glotscope[segmenters]`). MeCab
 | `strr.py` / `roundtrip.py` | STRR under both conventions; round-trip losslessness |
 | `utf8.py` | Tier 0 UTF-8 classification |
 | `lint.py` | Tier 0 vocabulary lint: unreachable ids, special ids, byte-fallback coverage, family/algorithm inference |
+| `tiktoken_backend.py` | an OpenAI encoding presented through the `tokenizers` surface Tier 0/1 read — an adapter, not a conversion |
+| `loading.py` | a command-line source (`tokenizer.json` path, Hub id, `tiktoken:` name) turned into a loaded artifact |
+| `reference_set.py` / `detect.py` | §7.9: the three-link reference-set fallback chain; both under-training indicators + Spearman agreement |
+| `morphology.py` / `morphynet.py` / `conllu.py` | §7.7's three measures; MorphyNet as character-offset gold; CoNLL-U as gold word boundaries |
+| `unicode_script.py` | UAX #24 script attribution against the committed Unicode 17.0.0 table (D14) |
+| `reporting.py` / `document.py` | assembling the §9 document (`build_report`, `attach_tier2`); reading a published one back |
+| `compare.py` | tabling result documents, refusing incomparable ones |
+| `leaderboard/` | `config` (strict roster validation), `run` (typed skips, one corpus read), `render` (caveat travels with the table), `check` (the nightly comparison) |
 | `cli.py` | the six §8.2 subcommands via stdlib `argparse` (no CLI framework — the core dependency list is load-bearing for G1) |
 
 Three invariants are enforced structurally rather than by comment, and are already tested — preserve the shape, not just the behaviour:
@@ -221,6 +233,6 @@ Grep the PRD rather than re-reading 77 KB:
 
 Milestones have **binary** exit criteria (§15) — nothing is done on judgment. Ship order is front-loaded: **v0.1.0 to PyPI at M1 (18 Sep 2026)**, before the paper and before Rust (D15). Under schedule pressure the cut order is fixed: **M5 (Rust) → extended language set → HF Space → M4 model count (floor 8) →** *never* M1 or M2.
 
-Five §12.1 rows are **done** (Zouhar Rényi pair at 1e-9, hand-built UTF-8 vocabulary, `parity_L(L) = 1.0`, `Gini([1,2,3,4,5]) == 4/15`, and §7.2's compression family against TokEval at 1e-6), as is the PyPI reservation. Next work is selected from the frozen order in `docs/build-order.md`: Tier 0 (`lint.py`, `Tokenizer.from_*`) needs no external data and is the head of the queue; Tier 1 segmenter-free work needs FLORES+ (gated), and Tier 1 word-level work needs the segmenter extras.
+Six §12.1 rows are **done** (Zouhar Rényi pair at 1e-9, hand-built UTF-8 vocabulary, `parity_L(L) = 1.0`, `Gini([1,2,3,4,5]) == 4/15`, §7.2's compression family against TokEval at 1e-6, and Petrov's Shan premium within ±10%), plus §7.9's candidate-set validation (ρ = 1.000000 on all three models; counts short by 1/3/5, every missing token attributed in `divergences.md`). G3's coverage rule is satisfied. Next work is M3 — docs site first, then HF Space and launch — with the M4 pre-registration drafted before any `UTR_ℓ` is computed; `PROGRESS.md` holds the ordered list.
 
 Branch per task off `origin/foundation`, and do not push to `foundation` directly — the reviewed history goes through PRs.

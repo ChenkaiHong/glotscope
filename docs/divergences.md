@@ -185,10 +185,9 @@ exactly the situation a leaderboard has to refuse to table. Comparability is sco
 
 Two consequences worth stating rather than discovering:
 
-- STRR is deliberately absent from `compare`'s `METRICS`. §9 publishes neither `lowercased` nor
-  `n_words`, so its comparability key cannot be reconstructed from a document, and tabling it would
-  mean comparing two numbers whose conventions are unknown. Closing that gap is a schema change, held
-  until something needs it.
+- A metric can be tabled only if the document publishes its whole comparability key. STRR and Gini
+  were withheld on that rule until schema 1.4 published `lowercased`/`n_words` and `cost_unit` — see
+  "`compare` withheld gini and STRR until schema 1.4" below.
 - Comparing results requires them to have been published first, which is the shape the leaderboard
   wants anyway: `results/` holds documents, and the nightly re-run compares documents to documents.
 
@@ -246,29 +245,27 @@ and its Stage 1 excludes special ids by design; reproducing the upstream asymmet
 publishing under a rule whose own threshold and selection predicates disagree. The differences are
 named here instead, which is what this file is for.
 
-## `compare` offers no gini column
+## `compare` withheld gini and STRR until schema 1.4
 
-**Status:** deliberate omission, on the same rule STRR is held to; reversible by a schema change.
+**Status:** resolved by schema 1.4 — both columns are back and both keys are checked. Kept as a record
+of why a 1.3 document refuses to compare against a 1.4 one.
 
 §7.4's Gini is comparable only at a fixed cost unit — `GiniResult.comparability_key()` returns
 `languages` **and** `cost_unit`, because a Gini computed per aligned line and one computed per
-sentence are different numbers wearing the same name. §9 publishes `corpus_level.gini` as a bare
-float and no unit beside it.
+sentence are different numbers wearing the same name. STRR is comparable only at a fixed word list and
+casing. Schema 1.3 published `corpus_level.gini` as a bare float, and neither `lowercased` nor
+`n_words` for STRR.
 
 So `compare` could not check the half that matters. Its gini branch keyed on the language sets alone
 and returned "comparable" whether or not the units agreed — an answer that looks like the refusal
-working and is not. The column was offered from the module's first version; it took a review pass to
-notice it had the same shape as the STRR case the same file had already excluded, three paragraphs up
-in its own docstring.
+working and is not. It took a review pass to notice the gini column had the same shape as the STRR case
+the module already excluded. Both were withdrawn rather than offered on an unverifiable basis.
 
-Removed from `METRICS` and from the corpus-level value path both, so no branch reads a name that can
-no longer be requested. `glotscope compare --metric gini` now names the metrics that exist.
-
-The alternative was schema 1.4, publishing `cost_unit` in §9. Kai chose the removal: it ships without
-moving every committed `result.json` or the G4 fixture, and it keeps one rule rather than two. Three
-candidates are now parked behind that same bump — `cost_unit`, §7.9's agreement threshold, and STRR's
-`lowercased`/`n_words`, all of them the same unpublished-comparability problem. If the schema moves,
-it should move once and clear all three.
+The fix was chosen to move the schema once rather than three times: schema 1.4 publishes
+`gini_cost_unit`, `strr_lowercased`, `strr_n_words` and §7.9's `agreement_threshold` together, and
+`compare` tables gini and both STRR conventions against their full keys. A 1.3 document carries none of
+the new fields and reads them as `None`, which **refuses** against a 1.4 document rather than treating
+two unknowns as equal.
 
 ## UD multiword tokens are not morpheme boundaries
 

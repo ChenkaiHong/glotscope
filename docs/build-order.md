@@ -118,9 +118,11 @@ are never cut. The package ships at M1 (**Fri 18 Sep 2026**), before the paper a
 
 ## Not yet written
 
-- One load-bearing CI job remains: the nightly leaderboard re-run that fails if any published number
-  moves. `glotscope verify` against a committed `result.json` is **done** and runs on every cell. The
-  3.10–3.13 × {ubuntu, macos, windows} quality matrix is implemented and green.
-- `leaderboard.yaml`, `results/` — M3.
+- Both load-bearing CI jobs exist. `glotscope verify` against a committed `result.json` runs on every
+  cell of the 3.10–3.13 × {ubuntu, macos, windows} quality matrix. The nightly leaderboard re-run
+  (`.github/workflows/nightly.yml`) fails if a published number moves; it recomputes Tier 0 only,
+  because FLORES+ is gated and an anonymous runner has no corpus.
+- `leaderboard.yaml` and `results/` are written: 13 rows published, 3 skipped. No row configures
+  weights yet, so the Tier 2 column holds no measurement.
 - Tier metric packages (`tier0/`, `tier1/`, `tier2/`) — deliberately not stubbed. The contracts are
   pinned by the `Tier1Report` methods and the `aggregate` boundary; empty files would be churn.
