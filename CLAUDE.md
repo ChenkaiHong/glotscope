@@ -83,7 +83,7 @@ The 12-cell quality matrix (3.10–3.13 × {ubuntu, macos, windows}) is implemen
 
 Blocking unknowns U1–U5 are **resolved** — evidence in `docs/m0-source-audit.md`, sequencing in `docs/build-order.md`, discrepancies in `docs/divergences.md`. Two PRD items remain `UNVERIFIED` and must not be cited: the gated Command-R / Command-A / Aya Expanse / Gemma 2 vocab sizes, and the Phi-3/3.5 and ByT5 vocab sizes.
 
-PyPI name reserved 10 Aug 2026 with a 0.0.0 placeholder; **v0.1.0 published 20 Aug 2026**. v0.2.0 is M2's deliverable (window 21 Sep – 16 Oct) and is not yet cut. `make upload REPOSITORY=pypi` needs Kai's token, and a published sdist cannot be retracted.
+PyPI name reserved 10 Aug 2026 with a 0.0.0 placeholder; **v0.1.0 published 20 Aug 2026**. **v0.2.0 (M2's deliverable, window 21 Sep – 16 Oct) is prepared and not yet uploaded.** `make upload REPOSITORY=pypi` needs Kai's token, and a published sdist cannot be retracted.
 
 `verify` compares the **numbers**, not the producer: `glotscope_version` and `backend` are reported rather than compared, because comparing them would make every release invalidate every result published before it. `schema_version` *is* compared — a schema change changes the document. The committed fixture is deliberately left at `0.0.0`, so every CI run asserts that a result published by an earlier release still regenerates.
 
