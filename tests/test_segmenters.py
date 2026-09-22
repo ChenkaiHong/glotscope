@@ -141,19 +141,29 @@ def test_icu_and_whitespace_disagree_about_punctuation_on_the_same_english() -> 
     assert len(whitespace) == 3
 
 
+def test_no_segmenter_is_unbuilt_any_more() -> None:
+    # UD_GOLD, then STANZA and UDPIPE, were all in this list and are all built —
+    # see tests/test_gold_segmenter.py and tests/test_trained_segmenters.py. The
+    # assertion is kept rather than deleted because the empty table is the claim:
+    # every `Segmenter` member now has an adapter, and a member added later
+    # without one would surface here rather than as a NotImplementedError nobody
+    # expected.
+    from glotscope.segmenters import _LOADERS, _TRAINED, _UNBUILT
+
+    assert _UNBUILT == {}
+    built = set(_LOADERS) | set(_TRAINED) | {Segmenter.UD_GOLD}
+    assert built == set(Segmenter)
+
+
 @pytest.mark.parametrize("segmenter", [Segmenter.STANZA, Segmenter.UDPIPE])
-def test_the_unwritten_segmenters_are_reported_as_unbuilt_not_as_refusals(
+def test_a_trained_segmenter_asks_for_its_model_rather_than_choosing_one(
     segmenter: Segmenter,
 ) -> None:
-    # NotImplementedError, never SegmenterUnavailableError: these are scheduled,
-    # and telling a caller to install an extra that would not help sends them
-    # after the wrong fix. Both additionally need a pinned model path.
-    #
-    # UD_GOLD was in this list and is now built. It raises ValueError naming the
-    # annotation to pass, which is a different answer: the adapter exists, and
-    # what is missing is an input only the caller has. See
-    # tests/test_gold_segmenter.py.
-    with pytest.raises(NotImplementedError):
+    # ValueError, not NotImplementedError: the adapter exists, and what is
+    # missing is an input only the caller has — the same shape as UD_GOLD asking
+    # for its annotation. Both refuse to download one, because an artifact
+    # fetched on first use sits behind every published number unrecorded.
+    with pytest.raises(ValueError, match="model"):
         get_segmenter(segmenter, language="eng_Latn")
 
 

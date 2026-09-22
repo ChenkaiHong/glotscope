@@ -11,8 +11,11 @@ suites stop at the tokenizer; the existing glitch-token detector starts at the w
 installable.
 
 > **Status: v0.1.0 published.** `pip install glotscope`. Tiers 0, 1 and 2 are implemented and
-> tested, and `glotscope lint`, `analyze`, `detect`, `compare` and `verify` run. `leaderboard` is
-> scheduled and exits 2 rather than guessing. Tier 2's indicators reproduce the published
+> tested, and `glotscope lint`, `analyze`, `detect`, `compare`, `verify` and `leaderboard` run. The
+> published board is in [`results/leaderboard.md`](results/leaderboard.md), every row carrying its
+> manifest, and a nightly job re-checks it against the pinned revisions. All three loaders are live: a local `tokenizer.json`,
+> a Hub repository pinned to the commit it resolved, and an OpenAI encoding as `tiktoken:o200k_base`
+> — the last carrying a digest over the encoding's own definition, since it has no commit to pin. Tier 2's indicators reproduce the published
 > under-training ranking exactly — Spearman ρ = 1.000000 against the reference implementation on all
 > three of its models — and the candidate sets differ by one to five tokens, each attributed to a
 > named selection rule rather than tuned away. Morphology runs end to end against MorphyNet, over

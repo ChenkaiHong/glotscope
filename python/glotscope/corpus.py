@@ -153,7 +153,10 @@ REGISTRY: dict[str, CorpusSpec] = {
         license="CC-BY-SA-4.0",
         is_commercial_ok=True,
         gated=True,
-        note="229 varieties; dev 997 / devtest 1012. Primary parallel corpus.",
+        note="Primary parallel corpus. dev 997 / devtest 1012 documents per "
+        "language. The splits do not carry the same varieties: 227 in dev and "
+        "221 in devtest at revision 5fec6c13, 218 in both — see "
+        "docs/divergences.md, which is why a variety is looked up per split.",
         recipe="Hugging Face dataset 'openlanguagedata/flores_plus', pinned by "
         "revision. Gated: needs HF_TOKEN or accepted terms. Write one file per "
         "language as <root>/flores_plus/<version>/<split>/<lang>.txt.",

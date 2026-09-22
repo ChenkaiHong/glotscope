@@ -25,8 +25,9 @@ def language_prefix(language: str) -> str:
     FLORES+ codes are ``<iso639-3>_<script>`` — ``jpn_Jpan``, ``zho_Hans`` — and
     other corpora use bare two-letter codes. Both are accepted, which is why the
     scoped adapters list ISO 639-1 and 639-3 spellings side by side rather than
-    normalizing to one: mapping between them needs a table this library has no
-    reason to carry.
+    normalizing to one. The one adapter that has to speak ISO 639-1 — Stanza
+    keys its resources by it — carries the table in
+    :mod:`glotscope.segmenters.stanza_languages`; nothing else needs one.
     """
     return language.split("_", 1)[0].lower()
 

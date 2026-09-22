@@ -31,22 +31,32 @@ import argparse
 import json
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from glotscope import __version__, backend
 from glotscope.compare import METRICS
 from glotscope.compare import compare as compare_results
-from glotscope.corpus import REGISTRY, Corpus, LoadedCorpus
-from glotscope.detect import AGREEMENT_THRESHOLD
+from glotscope.corpus import REGISTRY, Corpus
 from glotscope.document import load_result
 from glotscope.embeddings import Embeddings
 from glotscope.enums import MorphologicalType, Normalization, RenyiNormalizer, Segmenter
 from glotscope.errors import GlotscopeError, TokenizerLoadError
+from glotscope.leaderboard import (
+    ALL_TIERS,
+    check_board,
+    load_config,
+    render_markdown,
+    run_leaderboard,
+)
+from glotscope.loading import load_embeddings as _load_embeddings
+from glotscope.loading import load_tokenizer as _load_tokenizer
 from glotscope.manifest import Manifest, ParameterManifest, canonical_json, environment
 from glotscope.report import Report, Tier0Report
-from glotscope.results import CorpusMetrics
+from glotscope.reporting import attach_tier2
+from glotscope.reporting import build_report as _build_report
+from glotscope.segmenters import requires_model
+from glotscope.segmenters.trained import model_digest, recorded_digest, require_model
 from glotscope.tokenizer import Tokenizer
 
 __all__ = ["build_parser", "main"]
@@ -96,9 +106,10 @@ _REFUSED = 1
 _NOT_YET = 2
 """Exit code for a subcommand whose implementation is still scheduled."""
 
-_MILESTONES = {
-    "leaderboard": "M3",
-}
+_MILESTONES: dict[str, str] = {}
+"""Subcommands scheduled but not built. Empty since the leaderboard landed —
+kept because exit 2 is part of the interface (§8.2) and the next scheduled
+command should reuse it rather than reinvent the distinction."""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -147,6 +158,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "required for word-level metrics (fertility, STRR, morphology); there "
             "is no default. Omit it to compute only the segmenter-free metrics."
+        ),
+    )
+    analyze.add_argument(
+        "--segmenter-model",
+        default=None,
+        help=(
+            "path to the trained model for --segmenter stanza or udpipe. Required "
+            "for those two and ignored by the rest: neither will download a model, "
+            "because one fetched on first use sits behind every published number "
+            "with the manifest never having seen it"
         ),
     )
     analyze.add_argument(
@@ -259,8 +280,47 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--format", choices=["md", "json", "csv"], default="md")
 
     leaderboard = sub.add_parser("leaderboard", help="regenerate the published leaderboard")
-    leaderboard.add_argument("--config", required=True)
-    leaderboard.add_argument("--out", required=True)
+    leaderboard.add_argument(
+        "--config",
+        required=True,
+        help="leaderboard.yaml, or the same document as .json for a core install",
+    )
+    leaderboard.add_argument(
+        "--out",
+        default=None,
+        help="directory for leaderboard.json and .md; optional when only --check is wanted",
+    )
+    leaderboard.add_argument(
+        "--check",
+        default=None,
+        help=(
+            "a published leaderboard.json to compare this run against. Exits 1 if "
+            "any number moved (§16.1's nightly job). Environment, backend and "
+            "glotscope_version are reported rather than compared, so a release "
+            "does not invalidate a published board"
+        ),
+    )
+    leaderboard.add_argument(
+        "--check-tiers",
+        default=",".join(ALL_TIERS),
+        help=(
+            "which tier blocks this run actually recomputed, for --check. The "
+            "nightly job runs anonymously where the corpus is gated and can "
+            "regenerate tier0 alone; comparing a tier nothing measured would "
+            "report a column as unchanged when nothing looked at it"
+        ),
+    )
+    leaderboard.add_argument(
+        "--corpus-root",
+        default=".",
+        help="directory holding the downloaded corpora; the library ships none (D12)",
+    )
+    leaderboard.add_argument(
+        "--top-pct",
+        type=float,
+        default=2.0,
+        help="§7.9 candidate share, for rows that declare weights",
+    )
 
     verify = sub.add_parser("verify", help="re-check that a manifest reproduces its numbers")
     verify.add_argument("result", help="path to a result.json")
@@ -295,6 +355,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     verify.add_argument(
+        "--segmenter-model",
+        default=None,
+        help=(
+            "the trained model the result's segmenter ran with, for a document "
+            "computed under stanza or udpipe. Required for the same reason "
+            "--tokenizer is: §9 keeps filesystem paths out of the manifest, so "
+            "the document records what the model is (a SHA-256) but not where "
+            "it lives. The digest is checked against the manifest before "
+            "anything is recomputed."
+        ),
+    )
+    verify.add_argument(
         "--corpus-root",
         default=".",
         help="directory holding the downloaded corpora; the library ships none (D12)",
@@ -307,90 +379,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     return parser
-
-
-def _looks_like_a_local_path(source: str) -> bool:
-    """Tell a path the user meant from a Hub identifier they meant.
-
-    Only reached once the source has been shown not to exist, and the two
-    answers differ in what they tell the reader: a path is a wrong argument to
-    fix now, an identifier is a feature scheduled for a later release. Guessing
-    "identifier" for both is what made a typo look like a missing feature.
-    """
-    path = Path(source)
-    return (
-        path.is_absolute()
-        or source.startswith(("~", "./", "../", ".\\", "..\\"))
-        or path.suffix == ".json"
-        # A parent that exists means the user was naming a place on this disk.
-        # "." is excluded: a bare name is the shape a Hub identifier takes.
-        or (str(path.parent) != "." and path.parent.is_dir())
-    )
-
-
-def _load_tokenizer(source: str, revision: str | None) -> Tokenizer:
-    """Load the tokenizer named on the command line.
-
-    A local ``tokenizer.json``, a directory holding one, or a Hub identifier.
-    The routing matters more than either branch: a path that does not exist is a
-    wrong argument to fix now, while a bare name is an identifier to resolve, and
-    reporting one as the other sends the reader after the wrong fix.
-
-    A Hub identifier resolves to a commit SHA and that SHA is what the manifest
-    records, so a row can never silently name one artifact and analyse another —
-    the failure §11 exists to prevent.
-
-    Raises:
-        TokenizerLoadError: the source names a place on this disk holding no
-            tokenizer, or a repository publishing no ``tokenizer.json``. Exit 1 —
-            a real answer about this input, not a missing feature.
-    """
-    path = Path(source)
-    if revision is None:
-        if path.is_dir():
-            candidate = path / "tokenizer.json"
-            if not candidate.is_file():
-                raise TokenizerLoadError(source, "a directory holding no tokenizer.json")
-            return Tokenizer.from_file(candidate)
-        if path.is_file():
-            return Tokenizer.from_file(path)
-    if _looks_like_a_local_path(source):
-        raise TokenizerLoadError(
-            source,
-            "no such file or directory"
-            if revision is None
-            else "--revision selects a commit on the Hub, and this names a local path",
-        )
-    return Tokenizer.from_pretrained(source, revision=revision)
-
-
-def _load_embeddings(source: str, *, vocab_size: int, revision: str | None = None) -> Embeddings:
-    """Load the weights named on the command line.
-
-    A bare name is a Hub identifier and is resolved as one; anything that names
-    a place on this disk is read from there. Collapsing the two would report a
-    mistyped path as a missing model, or a model as a mistyped path, and send
-    the reader after the wrong fix either way.
-
-    Unlike the tokenizer, the Hub path here is implemented:
-    ``Embeddings.from_checkpoint`` reads only the shards holding the embedding
-    tensors, which is 8.94 GB of Jamba's 96.06 GB rather than all of it.
-
-    Raises:
-        FileNotFoundError: the source names a place on this disk holding nothing.
-    """
-    path = Path(source)
-    if path.is_file():
-        if revision is not None:
-            raise ValueError(
-                f"--weights-revision names a commit on the Hub, and {source} is a "
-                f"file on this disk. Recording a revision beside a local path "
-                f"would pin nothing; that file's identity is its shard_sha256."
-            )
-        return Embeddings.from_file(path, vocab_size=vocab_size)
-    if _looks_like_a_local_path(source):
-        raise FileNotFoundError(f"{source}: no such file or directory")
-    return Embeddings.from_checkpoint(source, revision=revision)
 
 
 def _emit(document: str, out: str | None) -> None:
@@ -429,74 +417,6 @@ def _lint(args: argparse.Namespace) -> int:
     return 0
 
 
-def _build_report(
-    tokenizer: Tokenizer,
-    loaded: LoadedCorpus,
-    *,
-    leading_space: bool,
-    normalization: Normalization,
-    add_special_tokens: bool,
-    segmenter: Segmenter | None,
-    parity_reference: str | None,
-    gini: bool,
-    renyi_alpha: float | None,
-    renyi_normalizer: RenyiNormalizer,
-    nominal_vocab_size: int | None,
-    morphological_types: Mapping[str, MorphologicalType] | None = None,
-    frequency_weighted: bool | None = None,
-    include_single_token_words: bool | None = None,
-) -> Report:
-    """Assemble the §9 document. One code path, used by ``analyze`` and ``verify``.
-
-    Shared rather than reimplemented because ``verify``'s whole claim is that it
-    regenerates what ``analyze`` produced. A second assembly of the same document
-    would be a second thing to drift, and that drift would surface as a
-    verification failure blamed on the numbers.
-    """
-    tier1 = tokenizer.analyze(
-        loaded,
-        leading_space=leading_space,
-        normalization=normalization,
-        add_special_tokens=add_special_tokens,
-        segmenter=segmenter,
-        morphological_types=morphological_types,
-        frequency_weighted=frequency_weighted,
-        include_single_token_words=include_single_token_words,
-    )
-    tier1 = replace(
-        tier1,
-        corpus_level=CorpusMetrics(
-            gini=tier1.gini() if gini else None,
-            renyi=(
-                tier1.renyi_efficiency(
-                    renyi_alpha,
-                    normalizer=renyi_normalizer,
-                    nominal_vocab_size=nominal_vocab_size,
-                )
-                if renyi_alpha is not None
-                else None
-            ),
-            parity=tier1.parity(parity_reference) if parity_reference is not None else None,
-        ),
-    )
-    if tier1.parameters is None or tier1.corpus is None:
-        raise RuntimeError("analyze() returned a report without its manifest fragments")
-
-    return Report(
-        tier0=tokenizer.lint(),
-        tier1=tier1,
-        manifest=Manifest(
-            tokenizer=tokenizer.manifest,
-            parameters=tier1.parameters,
-            environment=environment(),
-            backend=backend(),
-            glotscope_version=__version__,
-            corpus=tier1.corpus,
-        ),
-        warnings=tokenizer.warnings,
-    )
-
-
 def _analyze(args: argparse.Namespace) -> int:
     """Tier 0 + Tier 1 in one §9 document.
 
@@ -519,6 +439,7 @@ def _analyze(args: argparse.Namespace) -> int:
         normalization=Normalization(args.normalization),
         add_special_tokens=args.add_special_tokens,
         segmenter=Segmenter(args.segmenter) if args.segmenter is not None else None,
+        segmenter_model=args.segmenter_model,
         parity_reference=args.parity_reference,
         gini=args.gini,
         renyi_alpha=args.renyi_alpha,
@@ -574,6 +495,9 @@ def _detect_report(
     reason: a verify that assembled the document its own way would be comparing
     a published result against a second implementation rather than regenerating
     it, and the two could drift apart without either being wrong on its own.
+    The Tier 2 half of the assembly is :func:`attach_tier2`, shared with the
+    leaderboard so that a board row and a ``detect`` document carry the same
+    provenance for the same measurement.
 
     No corpus block: Tier 2 reads weights and needs no text, so the manifest
     omits the corpus rather than writing nulls into it — §9's nesting is what a
@@ -588,39 +512,27 @@ def _detect_report(
     ``tier0`` is passed in rather than re-linted, because the caller has already
     computed it to size the embedding read.
     """
-    tier2 = tokenizer.detect_undertrained(
-        embeddings,
-        top_pct=top_pct,
-        remove_first_pc=remove_first_pc,
-    )
-    # The weights have been read, so `embedding_rows` is known and the load-time
-    # warning that called it unknown is no longer true of this document.
-    tokenizer_manifest, warnings = tokenizer.with_weights(embedding_rows=embeddings.n_rows)
-    return Report(
+    tier0_only = Report(
         tier0=tier0,
-        tier2=tier2,
         manifest=Manifest(
-            tokenizer=tokenizer_manifest,
+            tokenizer=tokenizer.manifest,
             parameters=ParameterManifest(
                 leading_space=False,
                 normalization=Normalization.NONE,
                 add_special_tokens=False,
-                top_pct=top_pct,
-                # §7.9 requires LOW_CONFIDENCE "when they disagree beyond
-                # threshold" and fixes no value, so the verdict is unreadable
-                # without the line it was measured against: a HIGH from a run at
-                # 0.7 says something different from a HIGH at 0.3.
-                agreement_threshold=AGREEMENT_THRESHOLD,
-                candidates_pre_exclusion=tier2.candidates_pre_exclusion,
-                candidates_post_exclusion=tier2.candidates_post_exclusion,
-                first_pc_removed=tier2.first_pc_removed,
             ),
             environment=environment(),
             backend=backend(),
             glotscope_version=__version__,
-            weights=embeddings.manifest,
         ),
-        warnings=warnings,
+        warnings=tokenizer.warnings,
+    )
+    return attach_tier2(
+        tier0_only,
+        tokenizer,
+        embeddings,
+        top_pct=top_pct,
+        remove_first_pc=remove_first_pc,
     )
 
 
@@ -763,43 +675,50 @@ def _regenerate(
 ) -> Report:
     """Re-run whichever tiers the committed document declares.
 
+    A document carrying a corpus block and a tier2 block is a leaderboard row —
+    Tier 1 over the corpus, then Tier 2 over the row's weights — and is
+    regenerated the way it was produced: the Tier 1 report first, the Tier 2
+    result attached to it. ``detect`` writes no corpus block and ``analyze`` no
+    tier2 block, so each of those is one half of the same path.
+
     Raises:
-        ValueError: for a document no subcommand writes — one carrying both a
-            corpus and a tier2 block, or neither. The first cannot be
-            regenerated because nothing produces it and there is no single run
-            to reproduce; the second is a ``lint`` document, which has no
-            recomputed numbers to compare.
+        ValueError: for a document carrying neither. That is a ``lint``
+            document, which has no recomputed numbers to compare.
     """
     has_corpus = "corpus" in manifest
     has_tier2 = "tier2" in committed
-    if has_corpus and has_tier2:
+    if not has_corpus and not has_tier2:
         raise ValueError(
-            f"{args.result!r} carries both a corpus and a tier2 block, and no "
-            f"subcommand writes that: `analyze` produces Tier 1 and `detect` "
-            f"produces Tier 2. Regenerating it would mean inventing a single run "
-            f"that never happened."
+            f"{args.result!r} carries neither a corpus nor a tier2 block, so it "
+            f"records no recomputed numbers. `glotscope lint` writes that document; "
+            f"verify expects one from `analyze`, `detect` or `leaderboard`."
         )
-    if has_tier2:
+    if not has_corpus:
         return _regenerate_detect(args, manifest, tokenizer)
-    if has_corpus:
-        return _regenerate_analyze(args, committed, manifest, tokenizer)
-    raise ValueError(
-        f"{args.result!r} carries neither a corpus nor a tier2 block, so it "
-        f"records no recomputed numbers. `glotscope lint` writes that document; "
-        f"verify expects one from `analyze` or `detect`."
+    report = _regenerate_analyze(args, committed, manifest, tokenizer)
+    if not has_tier2:
+        return report
+    parameters = manifest["parameters"]
+    embeddings = _pinned_embeddings(args, manifest, vocab_size=report.tier0.vocab_size)
+    return attach_tier2(
+        report,
+        tokenizer,
+        embeddings,
+        top_pct=parameters["top_pct"],
+        remove_first_pc=parameters["first_pc_removed"],
     )
 
 
-def _regenerate_detect(
-    args: argparse.Namespace,
-    manifest: Mapping[str, Any],
-    tokenizer: Tokenizer,
-) -> Report:
-    """Re-run Tier 0 + Tier 2 from the recorded parameters (§7.9, G4).
+def _pinned_embeddings(
+    args: argparse.Namespace, manifest: Mapping[str, Any], *, vocab_size: int
+) -> Embeddings:
+    """The weights ``--weights`` names, once they are known to be the ones the
+    manifest pins.
 
     Raises:
-        ValueError: if ``--weights`` was not supplied, or if the supplied
-            checkpoint is not the one the manifest pins.
+        ValueError: if ``--weights`` was not supplied, if the document carries
+            no weights manifest to check against, or if the supplied checkpoint
+            is not the one the manifest pins.
     """
     if args.weights is None:
         raise ValueError(
@@ -813,13 +732,10 @@ def _regenerate_detect(
         raise ValueError(
             f"{args.result!r} carries a tier2 block and no weights manifest, so "
             f"the checkpoint it describes cannot be identified. It was not "
-            f"written by `glotscope detect`."
+            f"written by `glotscope detect` or `glotscope leaderboard`."
         )
-
-    parameters = manifest["parameters"]
-    tier0 = tokenizer.lint()
     embeddings = _load_embeddings(
-        args.weights, vocab_size=tier0.vocab_size, revision=args.weights_revision
+        args.weights, vocab_size=vocab_size, revision=args.weights_revision
     )
     # The same rule the tokenizer follows two frames up: identity is checked
     # before anything is recomputed, so the wrong checkpoint fails on what it is
@@ -830,6 +746,18 @@ def _regenerate_detect(
             f"match the {weights_block['shard_sha256']} this result was produced "
             f"with. The manifest pins the artifact by hash and by nothing else."
         )
+    return embeddings
+
+
+def _regenerate_detect(
+    args: argparse.Namespace,
+    manifest: Mapping[str, Any],
+    tokenizer: Tokenizer,
+) -> Report:
+    """Re-run Tier 0 + Tier 2 from the recorded parameters (§7.9, G4)."""
+    parameters = manifest["parameters"]
+    tier0 = tokenizer.lint()
+    embeddings = _pinned_embeddings(args, manifest, vocab_size=tier0.vocab_size)
     return _detect_report(
         tokenizer,
         tier0,
@@ -837,6 +765,43 @@ def _regenerate_detect(
         top_pct=parameters["top_pct"],
         remove_first_pc=parameters["first_pc_removed"],
     )
+
+
+def _pinned_segmenter_model(
+    args: argparse.Namespace,
+    segmenter: Segmenter | None,
+    recorded: Mapping[str, str] | None,
+) -> str | None:
+    """``--segmenter-model``, once it is known to be the model the manifest
+    records — or ``None`` for a segmenter that has no model to pin.
+
+    Raises:
+        ValueError: if the document was computed under a trained segmenter and
+            no model was supplied, or the one supplied is not the one recorded.
+        FileNotFoundError: if the path names nothing.
+    """
+    if segmenter is None or not requires_model(segmenter):
+        return None
+    if args.segmenter_model is None:
+        raise ValueError(
+            f"{args.result!r} was computed under {segmenter.value}, so "
+            f"regenerating it needs the model it ran with — pass "
+            f"--segmenter-model, exactly as --tokenizer is passed. §9 keeps "
+            f"filesystem paths out of the manifest: it records what the model "
+            f"is (a SHA-256), not where it lives."
+        )
+    path = require_model(segmenter, args.segmenter_model)
+    digest = model_digest(path)
+    for language, version in (recorded or {}).items():
+        expected = recorded_digest(version)
+        if expected is not None and expected != digest:
+            raise ValueError(
+                f"{args.segmenter_model}: sha256 {digest} does not match the "
+                f"{expected} the {language} boundaries in this result were "
+                f"produced with. The manifest pins the model by hash and by "
+                f"nothing else."
+            )
+    return str(path)
 
 
 def _regenerate_analyze(
@@ -857,7 +822,12 @@ def _regenerate_analyze(
         sha256=corpus_block["sha256"],
     )
     loaded = corpus.load(args.corpus_root, license_filter=args.license_filter)
-    segmenter = parameters.get("segmenter")
+    segmenter = Segmenter(parameters["segmenter"]) if parameters.get("segmenter") else None
+    # Checked before the corpus is encoded, like the tokenizer and the weights:
+    # a wrong model fails on what it is, not on the boundaries it produces.
+    segmenter_model = _pinned_segmenter_model(
+        args, segmenter, parameters.get("segmenter_model_versions")
+    )
     # §7.7's three recorded parameters are published in the per-language
     # morphology block rather than in ParameterManifest, so they are read from
     # where the value actually is — the same rule this function already follows
@@ -883,7 +853,8 @@ def _regenerate_analyze(
         leading_space=parameters["leading_space"],
         normalization=Normalization(parameters["normalization"]),
         add_special_tokens=parameters["add_special_tokens"],
-        segmenter=Segmenter(segmenter) if segmenter is not None else None,
+        segmenter=segmenter,
+        segmenter_model=segmenter_model,
         # Which corpus-level metrics ran is read off the document rather than
         # asked for again: a verify that skipped them would pass a file whose
         # gini or renyi no longer reproduces.
@@ -911,6 +882,64 @@ def _regenerate_analyze(
     )
 
 
+def _leaderboard(args: argparse.Namespace) -> int:
+    """Regenerate the published board (§16.1).
+
+    Two files, not one: ``leaderboard.json`` carries every row's full manifest
+    and is what §16.1's nightly job compares, while ``leaderboard.md`` is what a
+    person reads. Rendering at publish time rather than storing only the table
+    keeps the numbers and their provenance in the same run.
+
+    Output is canonical JSON so a regeneration diffs against the published board
+    on the numbers alone — key order drifting between runs would make every
+    night a diff and the nightly check useless.
+    """
+    if args.out is None and args.check is None:
+        raise ValueError("nothing to do: pass --out to publish a board, --check to re-check one")
+
+    config = load_config(args.config)
+    tiers = tuple(tier.strip() for tier in args.check_tiers.split(",") if tier.strip())
+    # A run asked only to re-check Tier 0 reads no corpus at all — which is what
+    # lets the nightly job run where FLORES+ is gated. Publishing a board still
+    # computes everything.
+    computed = ALL_TIERS if args.out is not None else tiers
+    board = run_leaderboard(
+        config, corpus_root=args.corpus_root, top_pct=args.top_pct, tiers=computed
+    )
+    document = board.to_dict()
+
+    for row in board.rows:
+        if row.skipped is not None:
+            print(f"warning: {row.entry.display} skipped — {row.skipped}", file=sys.stderr)
+
+    if args.out is not None:
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "leaderboard.json").write_text(canonical_json(document) + "\n", encoding="utf-8")
+        (out / "leaderboard.md").write_text(render_markdown(document), encoding="utf-8")
+        print(f"{board.published} published, {board.skipped} skipped -> {out}", file=sys.stderr)
+
+    if args.check is None:
+        return 0
+
+    published = json.loads(Path(args.check).read_text(encoding="utf-8"))
+    differences = check_board(published, document, tiers=tiers)
+    if not differences:
+        print(f"{args.check}: {len(document['rows'])} rows unchanged", file=sys.stderr)
+        return 0
+
+    # Every difference, not the first: naming one moved number would send
+    # someone to fix it and hide the other four.
+    print(
+        f"{args.check}: {len(differences)} published "
+        f"{'numbers have' if len(differences) > 1 else 'number has'} moved",
+        file=sys.stderr,
+    )
+    for difference in differences:
+        print(f"  {difference}", file=sys.stderr)
+    return _REFUSED
+
+
 def _compare(args: argparse.Namespace) -> int:
     """Table one metric across published results (PRD §8.2).
 
@@ -933,6 +962,7 @@ _HANDLERS = {
     "analyze": _analyze,
     "detect": _detect,
     "compare": _compare,
+    "leaderboard": _leaderboard,
     "verify": _verify,
 }
 

@@ -182,22 +182,34 @@ def special_ids(backend: Any) -> tuple[int, ...]:
     return tuple(sorted(token_id for token_id, token in added.items() if token.special))
 
 
-def lint_backend(backend: Any, spec: Mapping[str, Any]) -> Tier0Report:
+def lint_backend(
+    backend: Any,
+    spec: Mapping[str, Any],
+    *,
+    family: TokenizerFamily | None = None,
+) -> Tier0Report:
     """Run the whole Tier 0 pass over a loaded backend tokenizer (PRD §7.8).
 
     Args:
-        backend: a loaded ``tokenizers.Tokenizer``.
+        backend: a loaded ``tokenizers.Tokenizer``, or an adapter presenting the
+            same surface.
         spec: the parsed ``tokenizer.json`` it was loaded from. Passed in rather
             than re-serialized from ``backend``, so that the family, the
             algorithm and the manifest's SHA-256 all describe the same bytes.
+        family: the byte-handling family, where the loader knows it outright
+            instead of inferring it. A ``tokenizer.json`` names its own
+            pre-tokenizer and decoder, so inference is the only evidence there;
+            a tiktoken encoding is byte-level *by format*, and synthesizing a
+            spec that says so would put a fabricated document under a field
+            ``verify`` trusts.
     """
-    family = classify_family(spec)
-    by_id = vocab_bytes(backend.get_vocab(with_added_tokens=True), family)
+    resolved = family if family is not None else classify_family(spec)
+    by_id = vocab_bytes(backend.get_vocab(with_added_tokens=True), resolved)
     return build_utf8_report(
         by_id,
         unreachable_tokens=unreachable_ids(backend, sorted(by_id)),
         special_tokens=special_ids(backend),
-        family=family,
+        family=resolved,
     )
 
 

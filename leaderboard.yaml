@@ -1,0 +1,116 @@
+# The published leaderboard (PRD §16.1, G6).
+#
+# Regenerate with:
+#
+#     glotscope leaderboard --config leaderboard.yaml --out results/ \
+#         --corpus-root <root>
+#
+# The corpus is not shipped (D12). Fetch it first:
+#
+#     python scripts/fetch_flores_plus.py --root <root> --split devtest \
+#         --revision 5fec6c13f9e5a4db2f745d4ec0d7c9721ddc4f06
+#
+# Every Hub row is pinned by commit. An unpinned row would still record a
+# resolved SHA — but one nobody chose, and the nightly re-run would then report
+# an upstream branch advancing as a published number moving.
+version: 1
+
+corpus:
+  id: flores_plus
+  version: "2024.08"
+  split: devtest
+  # §10.2's core set: 15 languages, 11 scripts, 4 morphological types, 3 with no
+  # whitespace. Parity and Gini also run over all 221 devtest varieties, which is
+  # a separate and much longer run — this file is the curated board.
+  languages:
+    - eng_Latn   # reference language for parity
+    - spa_Latn   # high-resource Latin control; clitics
+    - rus_Cyrl   # non-Latin alphabetic, 2 bytes/char
+    - fin_Latn   # agglutinative, Latin script
+    - tur_Latn   # agglutinative; the canonical MorphScore test bed
+    - hin_Deva   # abugida with combining marks, 3 bytes/char
+    - arb_Arab   # root-and-pattern; the OUT_OF_SCOPE case
+    - kor_Hang   # featural script, isolated orthography
+    # §10.2 names this zho_Hans, which FLORES-200 used. FLORES+ renamed the
+    # macrolanguage code to the individual one; see docs/divergences.md.
+    - cmn_Hans   # isolating, no whitespace
+    - jpn_Jpan   # three scripts in one language, no whitespace
+    - tha_Thai   # abugida and no whitespace
+    - swh_Latn   # mid-resource Latin control
+    - amh_Ethi   # low-resource, Ethiopic, Semitic morphology
+    - shn_Mymr   # the documented worst case under GPT-2
+    - sat_Olck   # recently-encoded script, extremely low resource
+
+parameters:
+  # No segmenter: every metric on this board is segmenter-free. Fertility, STRR
+  # and morphology need one and are deliberately absent rather than computed
+  # under a default — W(D) is the single largest source of silent
+  # incomparability in this literature (D6).
+  segmenter: null
+  parity_reference: eng_Latn
+  gini: true
+  # Recorded because it is contested: the reference implementation defaults to
+  # 3.0 and the paper says 2.5. Rényi is supplementary, not headline (D8).
+  renyi_alpha: 2.5
+  renyi_normalizer: observed
+  normalization: NFC
+  leading_space: true
+  add_special_tokens: false
+
+roster:
+  # -- OpenAI encodings. Tokenizer-only: no open weights, so no Tier 2 column.
+  - id: "tiktoken:o200k_base"
+    label: o200k_base
+  - id: "tiktoken:o200k_harmony"
+    label: o200k_harmony
+  - id: "tiktoken:cl100k_base"
+    label: cl100k_base
+  - id: "tiktoken:r50k_base"
+    label: r50k_base (GPT-2)
+    note: the deliberately-bad multilingual baseline
+
+  # -- Open-weight models, pinned by commit.
+  - id: openai-community/gpt2
+    revision: 607a30d783dfa663caf39e06633721c8d4cfcd7e
+    label: GPT-2
+    note: same vocabulary as r50k_base, loaded through a different library
+  - id: Qwen/Qwen3-8B
+    revision: b968826d9c46dd6066d109eabc6255188de91218
+    label: Qwen3-8B
+  - id: deepseek-ai/DeepSeek-V3
+    revision: e815299b0bcbac849fa540c768ef21845365c9eb
+    label: DeepSeek-V3
+  - id: microsoft/phi-4
+    revision: 2db69c1c3e91a05d2c64a3185acfbaf36f744e25
+    label: phi-4
+  - id: openai/gpt-oss-20b
+    revision: 6cee5e81ee83917806bbde320786a8fb61efebee
+    label: gpt-oss-20b
+  - id: bigscience/bloom
+    revision: 7f10a99ce7c08f03c7719a586cb2cbda1433ac05
+    label: BLOOM
+  - id: facebook/nllb-200-distilled-600M
+    revision: f8d333a098d19b4fd9a8b18f94170487ad3f821d
+    label: NLLB-200
+  - id: FacebookAI/xlm-roberta-base
+    revision: e73636d4f797dec63c3081bb6ed5c7b0bb3f2089
+    label: XLM-R
+  - id: CohereLabs/aya-101
+    revision: e7dad472b9de8a30a00cf08a05c19003bf59028d
+    label: Aya-101
+
+  # -- SentencePiece-only. Listed so their absence is visible rather than
+  # silent: converting one would mean implementing a tokenizer, §3.2's first
+  # non-goal. These rows skip with that reason on every run.
+  - id: google/mt5-base
+    revision: 2eb15465c5dd7f72a8f7984306ad05ebc3dd1e1f
+    label: mT5
+    note: SentencePiece-only; publishes no tokenizer.json
+  - id: google/byt5-small
+    revision: 68377bdc18a2ffec8a0533fef03b1c513a4dd49d
+    label: ByT5
+    note: SentencePiece-only; the degenerate byte-level control
+  - id: cis-lmu/glot500-base
+    revision: d4d7c1ec01828fdf7452a4ccf7b55177aced175e
+    label: Glot500
+    note: SentencePiece-only; publishes no tokenizer.json

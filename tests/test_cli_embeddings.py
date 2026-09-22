@@ -29,17 +29,39 @@ def test_cli_without_a_command_prints_help_and_returns_nonzero(
     assert captured.err == ""
 
 
-def test_the_one_unbuilt_subcommand_refuses_cleanly(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    # `detect` used to be here and is now implemented — see tests/test_cli_detect.py.
-    assert main(["leaderboard", "--config", "board.toml", "--out", "board.json"]) == 2
+def test_every_subcommand_is_built() -> None:
+    """`detect` was here, then `leaderboard`; both are implemented now — see
+    tests/test_cli_detect.py and tests/test_cli_leaderboard.py.
 
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == (
-        "glotscope leaderboard: not implemented in this release. Scheduled for M3.\n"
-    )
+    Exit 2 means *scheduled but not built*, and no subcommand is any more. The
+    assertion is kept rather than deleted because the empty table is the claim:
+    the whole §8.2 surface exists, and a subcommand added later without a handler
+    would surface here rather than as a 2 nobody expected.
+    """
+    from glotscope.cli import _HANDLERS, _MILESTONES
+
+    assert _MILESTONES == {}
+    assert set(_HANDLERS) == {"lint", "analyze", "detect", "compare", "leaderboard", "verify"}
+
+
+def test_a_scheduled_path_inside_a_built_command_still_exits_2(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The distinction survives the last unbuilt subcommand.
+
+    ``STANZA`` and ``UDPIPE`` are written as scheduled rather than refused, so a
+    built command can still reach an unbuilt path — and that must stay a 2, which
+    sends the reader to wait for a release rather than to fix their arguments.
+    """
+    from glotscope.cli import _HANDLERS
+
+    def scheduled(args: object) -> int:
+        raise NotImplementedError("stanza: the adapter is scheduled but not written")
+
+    monkeypatch.setitem(_HANDLERS, "lint", scheduled)
+
+    assert main(["lint", "anything"]) == 2
+    assert "scheduled" in capsys.readouterr().err
 
 
 def test_cli_rejects_an_unknown_subcommand(capsys: pytest.CaptureFixture[str]) -> None:
