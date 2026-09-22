@@ -174,8 +174,11 @@ def render_markdown(document: Mapping[str, Any]) -> str:
     ]
     footer = [
         "",
-        "`Tier 2` reads *n/a (tokenizer-only)* where a row has no open weights to "
-        "read. That is a property of the model, not a failed measurement.",
+        "`Tier 2` reads *n/a (tokenizer-only)* for an encoding, which names a "
+        "tokenizer and no checkpoint. It reads *not run (no weights configured)* "
+        "where the row names a model and this board reads none of its weights — a "
+        "gap in the board, not a property of the model, and not a failed "
+        "measurement.",
         "",
         "`CPT` is the **mean** characters-per-token across the languages measured; "
         "the per-language values are in `leaderboard.json`.",

@@ -90,6 +90,47 @@ def test_a_tokenizer_only_row_says_so_in_its_tier_2_cell() -> None:
     assert "o200k_base" in table
 
 
+def test_a_model_row_without_weights_is_not_labelled_tokenizer_only() -> None:
+    """Qwen3-8B publishes its weights. A board that configured none for it read
+    nothing, and that is what the cell says — not that there was nothing to read."""
+    board = _Board(
+        (
+            LeaderboardRow(
+                entry=RosterEntry(id="Qwen/Qwen3-8B", revision="a" * 40),
+                result=_result(vocab=151669, cpt=2.1),
+            ),
+        )
+    )
+
+    table = render_markdown(board.to_dict())
+
+    row_line = next(line for line in table.splitlines() if line.startswith("| Qwen/Qwen3-8B "))
+    assert "not run (no weights configured)" in row_line
+    assert TOKENIZER_ONLY not in row_line
+
+
+def test_the_footer_defines_the_labels_without_misdescribing_the_models() -> None:
+    """The footer is where a reader learns what a label means, so a wrong
+    definition there is a false statement repeated once per row. The first board
+    defined ``n/a (tokenizer-only)`` as "no open weights to read" and printed it
+    beside nine models whose weights are published."""
+    board = _Board(
+        (
+            LeaderboardRow(
+                entry=RosterEntry(id="tiktoken:o200k_base"),
+                result=_result(vocab=200019, cpt=4.1),
+            ),
+        )
+    )
+
+    table = render_markdown(board.to_dict())
+
+    footer = table.split("\n\n")[-2:]
+    assert any(TOKENIZER_ONLY in paragraph for paragraph in footer)
+    assert any("not run (no weights configured)" in paragraph for paragraph in footer)
+    assert "no open weights" not in table
+
+
 def test_a_skipped_row_appears_with_its_reason_and_no_numbers() -> None:
     """A board that dropped skipped rows would look complete while being short,
     and a reader could not tell which model was missing."""

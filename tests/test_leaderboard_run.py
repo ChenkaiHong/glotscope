@@ -22,8 +22,10 @@ from tokenizers import decoders, models, pre_tokenizers
 
 from glotscope.corpus import Corpus
 from glotscope.errors import TokenizerLoadError
-from glotscope.leaderboard import load_config, run_leaderboard
+from glotscope.leaderboard import LeaderboardRow, RosterEntry, load_config, run_leaderboard
 from glotscope.lint import byte_to_unicode
+
+_REPO = Path(__file__).resolve().parents[1]
 
 _ENGLISH = ("The cat sat on the mat.", "It rained all afternoon.")
 _HINDI = ("बिल्ली चटाई पर बैठी।", "दोपहर भर बारिश हुई।")
@@ -142,6 +144,66 @@ def test_a_tokenizer_only_row_says_so_rather_than_leaving_tier_2_empty(
     assert row.tier2_status == "n/a (tokenizer-only)"
     assert row.result is not None
     assert "tier2" not in row.result
+
+
+def test_a_row_naming_a_model_without_weights_does_not_claim_it_has_none(
+    tmp_path: Path,
+) -> None:
+    """``n/a (tokenizer-only)`` is a claim about the model: that there is no
+    checkpoint to read. The first board printed it on every row, including nine
+    whose weights are on the Hub and which simply carried no ``weights:`` key. A
+    row that names a model says what the board did, not what the model lacks."""
+    root = _corpus_root(tmp_path)
+    config = _config(tmp_path, [{"id": str(_local_tokenizer(tmp_path))}])
+
+    row = run_leaderboard(config, corpus_root=root).rows[0]
+
+    assert row.skipped is None
+    assert row.tier2_status == "not run (no weights configured)"
+
+
+def test_a_row_whose_weights_were_not_read_does_not_deny_having_them(
+    tmp_path: Path, toy_encoding: Any
+) -> None:
+    """The Tier 0 re-check reads no weights, even for a row that configures
+    them. That row is an encoding, so the tokenizer-only label is one check away
+    — and would deny the ``weights:`` key its own configuration carries."""
+    config = _config(tmp_path, [{"id": "tiktoken:toy", "weights": "acme/model"}])
+
+    row = run_leaderboard(config, corpus_root=tmp_path / "unread", tiers=("tier0",)).rows[0]
+
+    assert row.skipped is None
+    assert row.tier2_status == "not run"
+
+
+def test_a_skipped_row_with_weights_does_not_deny_having_them() -> None:
+    entry = RosterEntry(id="acme/model", revision="a" * 40, weights="acme/model")
+
+    row = LeaderboardRow(entry=entry, skipped="TokenizerLoadError: gated")
+
+    assert row.tier2_status == "not run"
+
+
+def test_the_published_board_labels_tier_2_the_way_the_runner_does() -> None:
+    """The committed board is regenerated, never hand-edited, so every label in
+    it must be the one this code writes for that row. The first board said
+    ``n/a (tokenizer-only)`` on nine rows whose models publish weights, and
+    nothing compared the file against the logic that was supposed to produce it."""
+    pytest.importorskip("yaml")
+    board_path = _REPO / "results" / "leaderboard.json"
+    if not board_path.is_file():  # pragma: no cover - results are outside the sdist
+        pytest.skip("the published board lives in the repository, not in the distribution")
+
+    entries = {entry.id: entry for entry in load_config(_REPO / "leaderboard.yaml").roster}
+    board = json.loads(board_path.read_text(encoding="utf-8"))
+
+    for published in board["rows"]:
+        row = LeaderboardRow(
+            entry=entries[published["id"]],
+            result=published["result"],
+            skipped=published["skipped"],
+        )
+        assert published["tier2"] == row.tier2_status, published["id"]
 
 
 def test_the_board_records_what_it_was_computed_under(tmp_path: Path, toy_encoding: Any) -> None:

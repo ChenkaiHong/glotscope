@@ -38,12 +38,32 @@ from glotscope.tokenizer import Tokenizer
 __all__ = ["LeaderboardDocument", "LeaderboardRow", "run_leaderboard"]
 
 TOKENIZER_ONLY = "n/a (tokenizer-only)"
-"""What the Tier 2 column says for a row with no weights.
+"""What the Tier 2 column says for an encoding row that configures no weights.
 
-§16.1 is explicit that roughly half the core roster is tokenizer-only and that
-the column must not be left visually empty: a blank cell reads as a measurement
-that failed, and the launch positioning — "reads both your corpus and your
-checkpoint" — is undercut by a table that looks mostly broken.
+§16.1 requires the column never be left visually empty: a blank cell reads as a
+measurement that failed, and the launch positioning — "reads both your corpus
+and your checkpoint" — is undercut by a table that looks mostly broken.
+
+It is a claim about the model — that there is no checkpoint to read — so it is
+reserved for the one kind of row where that is true by construction. §16.1's own
+list of tokenizer-only models names several whose checkpoints are on the Hub,
+and the first published board printed this label on every row, nine of them
+models with published weights and no ``weights:`` key.
+"""
+
+NO_WEIGHTS_CONFIGURED = "not run (no weights configured)"
+"""What the Tier 2 column says for a model row that configures no weights.
+
+A statement about the board rather than the model: whether weights exist, and
+whether glotscope could read them, is not something a row with no ``weights:``
+key ever found out.
+"""
+
+NOT_RUN = "not run"
+"""A row that configures weights and carries no Tier 2 block.
+
+It was skipped, or the run recomputed Tier 0 alone. Either way the weights were
+not read, and neither label above would be true of it.
 """
 
 _UNREACHABLE: tuple[type[Exception], ...] = (
@@ -73,10 +93,18 @@ class LeaderboardRow:
 
     @property
     def tier2_status(self) -> str:
-        """What the Tier 2 column shows for this row."""
+        """What the Tier 2 column shows for this row.
+
+        Configured weights are checked before the row's kind, so an encoding
+        paired with a checkpoint is never called tokenizer-only.
+        """
         if self.result is not None and "tier2" in self.result:
             return "measured"
-        return TOKENIZER_ONLY
+        if self.entry.weights is not None:
+            return NOT_RUN
+        if self.entry.is_encoding:
+            return TOKENIZER_ONLY
+        return NO_WEIGHTS_CONFIGURED
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -136,7 +164,7 @@ class LeaderboardDocument:
 
 
 def _embeddings(tokenizer: Tokenizer, entry: RosterEntry) -> Embeddings | None:
-    """The row's weights, read — or ``None`` for a tokenizer-only row."""
+    """The row's weights, read — or ``None`` for a row that configures none."""
     if entry.weights is None:
         return None
     return load_embeddings(

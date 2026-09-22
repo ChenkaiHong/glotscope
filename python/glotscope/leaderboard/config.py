@@ -61,13 +61,18 @@ class RosterEntry:
     weights_revision: str | None = None
 
     @property
+    def is_encoding(self) -> bool:
+        """Whether this row names a tiktoken encoding: a tokenizer, and no checkpoint."""
+        return self.id.startswith(_TIKTOKEN_PREFIX)
+
+    @property
     def is_hub(self) -> bool:
         """Whether this row names a Hub repository, which is what must be pinned.
 
         A tiktoken encoding is defined by the installed library and a local file
         by its own bytes; neither has a commit, so neither can carry one.
         """
-        if self.id.startswith(_TIKTOKEN_PREFIX):
+        if self.is_encoding:
             return False
         path = Path(self.id)
         return not (

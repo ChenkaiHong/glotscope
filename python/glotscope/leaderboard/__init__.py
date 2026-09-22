@@ -18,6 +18,8 @@ from glotscope.leaderboard.config import (
 )
 from glotscope.leaderboard.render import render_markdown
 from glotscope.leaderboard.run import (
+    NO_WEIGHTS_CONFIGURED,
+    NOT_RUN,
     TOKENIZER_ONLY,
     LeaderboardDocument,
     LeaderboardRow,
@@ -26,6 +28,8 @@ from glotscope.leaderboard.run import (
 
 __all__ = [
     "ALL_TIERS",
+    "NOT_RUN",
+    "NO_WEIGHTS_CONFIGURED",
     "TOKENIZER_ONLY",
     "ConfigError",
     "CorpusPlan",
