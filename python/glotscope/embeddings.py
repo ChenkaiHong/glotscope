@@ -183,7 +183,14 @@ def _as_array(spec: dict[str, Any]) -> FloatMatrix:
         widened = np.frombuffer(data, dtype=np.uint16).astype(np.uint32) << np.uint32(16)
         upcast: FloatMatrix = widened.view(np.float32).reshape(shape)
         return upcast
-    native = {"F64": np.float64, "F32": np.float32, "F16": np.float16}[spec["dtype"]]
+    if spec["dtype"] == "F16":
+        # Widened for the same reason as BF16, though numpy could hold it: every
+        # §7.9 norm and cosine would otherwise accumulate in half precision, which
+        # collapses near-equal norms into ties and moves candidates across the
+        # top_pct line on identical weights. Exact — float32 holds every float16.
+        half: FloatMatrix = np.frombuffer(data, dtype=np.float16).reshape(shape)
+        return half.astype(np.float32)
+    native = {"F64": np.float64, "F32": np.float32}[spec["dtype"]]
     materialised: FloatMatrix = np.frombuffer(data, dtype=native).reshape(shape)
     return materialised
 

@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _safetensors import bf16, f32, write_safetensors
+from _safetensors import bf16, f16, f32, write_safetensors
 from glotscope.embeddings import Embeddings
 from glotscope.errors import UnsupportedCheckpointError
 
@@ -219,3 +219,23 @@ def test_an_untied_checkpoint_says_so_in_its_manifest(tmp_path: Path) -> None:
 
     # Assert
     assert manifest.tied_embeddings is False
+
+
+def test_float16_is_widened_before_anything_is_ranked(tmp_path: Path) -> None:
+    """BF16 was widened because numpy has no bfloat16; F16 was left as float16,
+    so every norm and cosine in §7.9 ran in half precision — enough to move
+    candidates across the top_pct line on the same weights. The manifest still
+    records what the checkpoint holds."""
+    # Arrange
+    rows = np.array([[0.1, 0.2, 0.3], [1.5, -2.25, 3.0]], dtype=np.float16)
+    path = write_safetensors(
+        tmp_path / "model.safetensors", {"model.embed_tokens.weight": f16(rows)}
+    )
+
+    # Act
+    embeddings = Embeddings.from_file(path, vocab_size=2)
+
+    # Assert
+    assert embeddings.dtype == "float16"
+    assert embeddings.e_in.dtype == np.float32
+    np.testing.assert_array_equal(embeddings.e_in, rows.astype(np.float32))

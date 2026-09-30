@@ -45,3 +45,8 @@ def bf16(values: Any) -> Tensor:
     array = np.ascontiguousarray(values, dtype=np.float32)
     truncated = (array.view(np.uint32) >> 16).astype(np.uint16)
     return "BF16", list(array.shape), truncated.tobytes()
+
+
+def f16(values: Any) -> Tensor:
+    array = np.ascontiguousarray(values, dtype=np.float16)
+    return "F16", list(array.shape), array.tobytes()
