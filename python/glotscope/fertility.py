@@ -30,7 +30,13 @@ of its characters map to ``[UNK]``.
 
 Without it, UNK-collapsing tokenizers fake good scores — every unrepresentable
 character collapses into one token, so fertility *falls* as coverage gets worse.
-FlanT5 fails this for 42% of FLORES-200 languages."""
+FlanT5 fails this for 42% of FLORES-200 languages.
+
+Scoped to fertility, deliberately. The same collapse flatters CPT and parity,
+but excluding a language from those per tokenizer would give every tokenizer its
+own language set — and §7.4 makes Gini, and with it a board of parity columns,
+incomparable across sets. Filtering the corpus-level metrics is a design choice
+for the §14 pre-registration, not part of this rule."""
 
 _NO_MODEL_NEEDED = frozenset({Segmenter.WHITESPACE, Segmenter.UD_GOLD})
 """The two segmenters that legitimately pin no model version: one applies no
