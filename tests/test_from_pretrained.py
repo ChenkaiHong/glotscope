@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -33,9 +34,9 @@ _RESOLVED = "a" * 40
 class _Card:
     """Stand-in for ``huggingface_hub``'s ``ModelInfo``, carrying what is read."""
 
-    def __init__(self, license_spdx: str | None) -> None:
+    def __init__(self, license_spdx: str | None, sha: str = _RESOLVED) -> None:
         self.card_data = {"license": license_spdx} if license_spdx else {}
-        self.sha = _RESOLVED
+        self.sha = sha
 
 
 def _write_repo(tmp_path: Path, *, with_config: bool = True) -> Path:
@@ -69,7 +70,10 @@ def _mock_hub(
         return str(repo / filename)
 
     def _model_info(repo_id: str, *, revision: str | None = None, **_: Any) -> _Card:
-        return _Card(license_spdx)
+        # A full commit resolves to itself; anything else — a branch, a tag, a
+        # short SHA — resolves to the head the mocked repository sits at.
+        full = revision is not None and re.fullmatch(r"[0-9a-f]{40}", revision)
+        return _Card(license_spdx, sha=revision if full and revision else _RESOLVED)
 
     monkeypatch.setattr(huggingface_hub, "hf_hub_download", _download)
     monkeypatch.setattr(huggingface_hub, "model_info", _model_info)
@@ -228,3 +232,26 @@ def test_a_config_that_cannot_be_fetched_is_an_error_not_an_absence(
 
     with pytest.raises(TokenizerLoadError, match=r"config\.json"):
         Tokenizer.from_pretrained("acme/model", revision=_RESOLVED)
+
+
+def test_a_branch_name_is_refused_naming_the_commit_it_resolves_to(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§9 records a commit, never a branch. ``revision="main"`` used to be written
+    into the manifest verbatim, naming something that moves."""
+    _mock_hub(monkeypatch, _write_repo(tmp_path))
+
+    with pytest.raises(TokenizerLoadError, match=_RESOLVED):
+        Tokenizer.from_pretrained("acme/model", revision="main")
+
+
+def test_a_short_sha_records_the_full_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asked = _mock_hub(monkeypatch, _write_repo(tmp_path))
+
+    tokenizer = Tokenizer.from_pretrained("acme/model", revision=_RESOLVED[:12])
+
+    assert tokenizer.manifest.revision == _RESOLVED
+    assert all(revision == _RESOLVED for _, _, revision in asked)
+    assert not any("did not pin" in warning for warning in tokenizer.warnings)

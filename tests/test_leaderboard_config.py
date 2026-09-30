@@ -294,3 +294,50 @@ def test_a_corpus_outside_the_registry_lists_the_known_ones(tmp_path: Path) -> N
 
     assert "not_a_corpus" in str(caught.value)
     assert "flores_plus" in str(caught.value)
+
+
+_HUB_ROW = """
+version: 1
+corpus:
+  id: flores_plus
+  languages: [eng_Latn, hin_Deva]
+roster:
+  - id: acme/model
+    revision: {revision}
+{extra}"""
+
+_COMMIT = "c" * 40
+
+
+def test_a_branch_is_not_a_revision(tmp_path: Path) -> None:
+    """§11 pins every row by commit; "main" names something that moves."""
+    with pytest.raises(ConfigError) as caught:
+        load_config(_write(tmp_path, _HUB_ROW.format(revision="main", extra="")))
+
+    assert "commit" in str(caught.value)
+
+
+def test_hub_weights_must_be_pinned(tmp_path: Path) -> None:
+    """A pinned tokenizer beside weights from a mutable branch is half a pin."""
+    text = _HUB_ROW.format(revision=_COMMIT, extra="    weights: acme/model\n")
+
+    with pytest.raises(ConfigError) as caught:
+        load_config(_write(tmp_path, text))
+
+    assert "weights_revision" in str(caught.value)
+
+
+def test_a_weights_revision_beside_a_local_file_is_refused(tmp_path: Path) -> None:
+    extra = "    weights: ./local.safetensors\n    weights_revision: " + _COMMIT + "\n"
+
+    with pytest.raises(ConfigError, match="weights_revision"):
+        load_config(_write(tmp_path, _HUB_ROW.format(revision=_COMMIT, extra=extra)))
+
+
+def test_local_weights_need_no_revision(tmp_path: Path) -> None:
+    extra = "    weights: ./local.safetensors\n"
+
+    config = load_config(_write(tmp_path, _HUB_ROW.format(revision=_COMMIT, extra=extra)))
+
+    assert config.roster[0].weights == "./local.safetensors"
+    assert config.roster[0].weights_revision is None

@@ -168,7 +168,10 @@ def test_a_row_whose_weights_were_not_read_does_not_deny_having_them(
     """The Tier 0 re-check reads no weights, even for a row that configures
     them. That row is an encoding, so the tokenizer-only label is one check away
     — and would deny the ``weights:`` key its own configuration carries."""
-    config = _config(tmp_path, [{"id": "tiktoken:toy", "weights": "acme/model"}])
+    config = _config(
+        tmp_path,
+        [{"id": "tiktoken:toy", "weights": "acme/model", "weights_revision": "d" * 40}],
+    )
 
     row = run_leaderboard(config, corpus_root=tmp_path / "unread", tiers=("tier0",)).rows[0]
 
@@ -312,7 +315,10 @@ def test_a_row_with_weights_is_measured_at_tier_2(
     from glotscope.embeddings import Embeddings
 
     root = _corpus_root(tmp_path)
-    config = _config(tmp_path, [{"id": "tiktoken:toy", "weights": "acme/model"}])
+    config = _config(
+        tmp_path,
+        [{"id": "tiktoken:toy", "weights": "acme/model", "weights_revision": "d" * 40}],
+    )
 
     rows = 258
     generator = np.random.default_rng(0)

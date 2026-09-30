@@ -15,6 +15,7 @@ read with the standard library and ``.yaml`` names the extra when it is missing.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,6 +34,21 @@ __all__ = [
 ]
 
 _TIKTOKEN_PREFIX = "tiktoken:"
+
+_COMMIT = re.compile(r"[0-9a-f]{40}")
+"""A full commit SHA — what §11 pins every Hub row by, tokenizer and weights."""
+
+_LOCAL_SUFFIXES = (".json", ".safetensors")
+
+
+def _names_a_hub_repo(identifier: str) -> bool:
+    """Whether ``identifier`` is a Hub repository rather than a place on disk."""
+    path = Path(identifier)
+    return not (
+        path.is_absolute()
+        or identifier.startswith(("~", "./", "../", ".\\", "..\\"))
+        or path.suffix in _LOCAL_SUFFIXES
+    )
 
 
 class ConfigError(ValueError):
@@ -74,12 +90,12 @@ class RosterEntry:
         """
         if self.is_encoding:
             return False
-        path = Path(self.id)
-        return not (
-            path.is_absolute()
-            or self.id.startswith(("~", "./", "../", ".\\", "..\\"))
-            or path.suffix == ".json"
-        )
+        return _names_a_hub_repo(self.id)
+
+    @property
+    def weights_is_hub(self) -> bool:
+        """Whether this row reads its weights from a Hub repository."""
+        return self.weights is not None and _names_a_hub_repo(self.weights)
 
     @property
     def display(self) -> str:
@@ -280,6 +296,7 @@ def _roster(rows: Any) -> tuple[RosterEntry, ...]:
                 f"identified by its own bytes and an encoding by the installed "
                 f"tiktoken — so a revision here would pin nothing."
             )
+        _require_commits(entry, where=where)
         if entry.is_mirror and not entry.note:
             raise ConfigError(
                 f"{where}: a mirror row needs a note. §11 requires "
@@ -290,6 +307,40 @@ def _roster(rows: Any) -> tuple[RosterEntry, ...]:
             )
         entries.append(entry)
     return tuple(entries)
+
+
+def _require_commits(entry: RosterEntry, *, where: str) -> None:
+    """Refuse a row pinned by anything but a commit, and unpinned Hub weights.
+
+    A branch or tag names something that moves, so a board pinned by one is
+    unpinned in all but name. Weights are the same artifact class as the
+    tokenizer: a pinned tokenizer beside weights read from a mutable branch is
+    half a pin, and a revision beside a local file pins nothing.
+    """
+    if entry.revision and not _COMMIT.fullmatch(entry.revision):
+        raise ConfigError(
+            f"{where}: revision {entry.revision!r} is not a commit. §11 pins every "
+            f"row by a full 40-character commit SHA; a branch or tag names "
+            f"something that moves."
+        )
+    if entry.weights_is_hub and not entry.weights_revision:
+        raise ConfigError(
+            f"{where}: weights {entry.weights!r} names a Hub repository and carries "
+            f"no weights_revision. A pinned tokenizer beside weights read from a "
+            f"mutable branch is half a pin."
+        )
+    if entry.weights_revision is None:
+        return
+    if not entry.weights_is_hub:
+        raise ConfigError(
+            f"{where}: weights_revision pins nothing here — the row's weights are "
+            f"not a Hub repository, and a local file is identified by its own bytes."
+        )
+    if not _COMMIT.fullmatch(entry.weights_revision):
+        raise ConfigError(
+            f"{where}: weights_revision {entry.weights_revision!r} is not a commit. "
+            f"§11 pins artifacts by a full 40-character commit SHA."
+        )
 
 
 def _parse(path: Path) -> Mapping[str, Any]:

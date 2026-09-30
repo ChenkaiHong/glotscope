@@ -240,6 +240,30 @@ def _hub_vocab_size_config(download: Any, model_id: str, revision: str | None) -
     return int(size) if isinstance(size, int) else None
 
 
+def _resolved_commit(model_id: str, revision: str | None, head: str) -> str:
+    """The commit a Hub load records — §9 records a commit, never a branch.
+
+    Unpinned resolves to what the Hub reports. A full or short commit SHA
+    resolves to the full one the Hub reports for it. Anything else — a branch or
+    a tag — is refused rather than recorded, naming the commit it resolves to
+    now: a manifest saying "main" names something that moves. Where the Hub
+    reports no SHA, the given revision is the only identity there is.
+
+    Raises:
+        TokenizerLoadError: if ``revision`` names a branch or a tag.
+    """
+    if revision is None or not head:
+        return revision or head
+    if head.startswith(revision):
+        return head
+    raise TokenizerLoadError(
+        model_id,
+        f"revision {revision!r} is a branch or tag, not a commit; it currently "
+        f"resolves to {head}. §9 records a commit: pass --revision {head}, or "
+        f"omit it to load unpinned with a warning",
+    )
+
+
 def _candidates(
     detection: Detection,
     *,
@@ -548,7 +572,7 @@ class Tokenizer:
         info = model_info(model_id, revision=revision)
         # Resolve before fetching, so the artifact and the recorded revision are
         # the same commit even if the branch moves between the two calls.
-        resolved = revision or str(getattr(info, "sha", "") or "")
+        resolved = _resolved_commit(model_id, revision, str(getattr(info, "sha", "") or ""))
 
         try:
             path = Path(download(model_id, _TOKENIZER_FILE, revision=resolved or revision))
