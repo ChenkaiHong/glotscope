@@ -389,3 +389,27 @@ The `tokenization-scorer` README labels two example calls `power=2.5`, but its d
 (`0.8031528501359657` and `0.9105681923824472`) are exactly the implementation's α=3.0 results. The
 formula produces `0.8265064834225245` and `0.9204840242168807` at α=2.5. Glotscope tests both facts and
 records α on every result rather than relabelling the published values.
+
+## Mixed kanji–kana tokens are attributed to no script
+
+**Status:** deliberate; a known undercount for Japanese in per-script counts. Not a reproduction gate.
+
+`unicode_script.script_of` gives a token one script or none, and a token mixing two real scripts gets
+none: mixed-script tokens are mostly mojibake and BPE junk, which is what Tier 2 exists to surface,
+and filing them under whichever script has more characters would inflate a real language's `UTR_ℓ`.
+UAX #24 has no notion of a writing system that combines scripts, so ordinary Japanese falls under the
+same rule. Japanese writes one word in Han and kana together — `的に`, `場合は`, `違う`, `楽しい` —
+and every such token is Han plus Hiragana, so it is attributed to no script.
+
+Measured over the vocabularies rather than assumed. Of the tokens drawn only from Han, Hiragana and
+Katakana, **547 of 27,711 in Qwen3-8B (2.0%)** and **78 of 8,112 in `o200k_base` (1.0%)** mix Han with
+kana, and every one of them gets `None`. `UTR_ℓ` is defined over the vocabulary partitioned by
+script, so these tokens drop out of Japanese's numerator and denominator alike — and they are the most
+Japanese-specific tokens in the vocabulary, since Chinese shares Han but not kana.
+
+**Why it is not resolved here.** ISO 15924 has codes for exactly these combinations — `Jpan` (Han +
+Hiragana + Katakana) and `Kore` (Hangul + Han) — so a token whose scripts all fall inside one such set
+could be attributed to the writing system instead of to nothing. That changes the partition the §14.3
+analysis is defined over (D14): `Jpan` tokens would need a mapping to languages beside `Hani`, which
+Chinese also claims. It is a decision for the pre-registration, not a fix. Until it is made, a
+per-script result for Japanese covers pure-Han, pure-Hiragana and pure-Katakana tokens only.
