@@ -386,8 +386,8 @@ def test_cli_routes_the_tiktoken_prefix(
 
     captured = capsys.readouterr()
     document = json.loads(captured.out)
-    assert document["family"] == "byte_level"
-    assert document["byte_fallback_coverage"] == 256
+    assert document["tier0"]["family"] == "byte_level"
+    assert document["tier0"]["byte_fallback_coverage"] == 256
     # The provenance warnings reach the operator, not only the document.
     assert "tokenizer_json_sha256" in captured.err
 

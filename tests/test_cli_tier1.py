@@ -73,9 +73,12 @@ def test_lint_prints_the_tier0_document(tmp_path: Path, capsys: pytest.CaptureFi
 
     captured = capsys.readouterr()
     document = json.loads(captured.out)
-    assert document["vocab_size"] == 256
-    assert document["family"] == "byte_level"
-    assert document["byte_fallback_coverage"] == 256
+    # A §9 document like every other subcommand's: schema, manifest, tier0.
+    assert document["schema_version"]
+    assert document["manifest"]["tokenizer"]["revision"] == "local"
+    assert document["tier0"]["vocab_size"] == 256
+    assert document["tier0"]["family"] == "byte_level"
+    assert document["tier0"]["byte_fallback_coverage"] == 256
     # Provenance gaps go to stderr, so stdout stays a clean document a pipe can
     # consume — and the gaps are still impossible to miss.
     assert "no upstream revision" in captured.err
@@ -105,7 +108,7 @@ def test_lint_routes_a_hub_identifier_to_the_hub(
 
     assert main(["lint", "acme/tokenizer"]) == 0
     assert "acme/tokenizer/tokenizer.json" in asked
-    assert json.loads(capsys.readouterr().out)["vocab_size"] == 256
+    assert json.loads(capsys.readouterr().out)["tier0"]["vocab_size"] == 256
 
 
 def test_lint_reports_a_mistyped_path_as_a_refusal_not_as_unbuilt(
@@ -130,7 +133,7 @@ def test_lint_reads_a_tokenizer_json_out_of_a_directory(
     _tokenizer_json(tmp_path)
 
     assert main(["lint", str(tmp_path)]) == 0
-    assert json.loads(capsys.readouterr().out)["vocab_size"] == 256
+    assert json.loads(capsys.readouterr().out)["tier0"]["vocab_size"] == 256
 
 
 def test_lint_reports_a_directory_without_a_tokenizer_json_as_a_refusal(
@@ -316,3 +319,22 @@ def test_an_unknown_corpus_is_rejected_by_the_parser(capsys: pytest.CaptureFixtu
             ["analyze", "t.json", "--corpus", "flores+", "--corpus-root", ".", "--languages", "en"]
         )
     assert "invalid choice" in capsys.readouterr().err
+
+
+def test_two_lint_documents_compare_on_a_tier0_metric(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``lint`` wrote a bare tier0 block with no schema or manifest, so the one
+    command that produces nothing but Tier 0 numbers could not feed ``compare``'s
+    Tier 0 metrics."""
+    documents: list[str] = []
+    for name in ("a", "b"):
+        directory = tmp_path / name
+        directory.mkdir()
+        assert main(["lint", str(_tokenizer_json(directory))]) == 0
+        out = tmp_path / f"{name}.json"
+        out.write_text(capsys.readouterr().out, encoding="utf-8")
+        documents.append(str(out))
+
+    assert main(["compare", *documents, "--metric", "vocab_size"]) == 0
+    assert "256" in capsys.readouterr().out

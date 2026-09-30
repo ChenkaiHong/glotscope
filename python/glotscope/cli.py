@@ -406,17 +406,45 @@ def _echo_warnings(document: Mapping[str, Any]) -> None:
 
 
 def _lint(args: argparse.Namespace) -> int:
-    """Tier 0. Warnings go to stderr so stdout stays a document a pipe can read.
+    """Tier 0 in one §9 document. Warnings go to stderr so stdout stays a
+    document a pipe can read.
 
-    Tier 0 has no tier-level warnings to aggregate — :meth:`Tier0Report.to_dict`
-    emits no ``warnings`` key — so this echoes the tokenizer's directly.
+    A document, not a bare tier0 block: every result carries a manifest (§9),
+    and without one ``compare`` could not table the Tier 0 numbers this command
+    exists to produce.
     """
     tokenizer = _load_tokenizer(args.tokenizer, args.revision)
-    report = tokenizer.lint()
-    for warning in tokenizer.warnings:
-        print(f"warning: {warning}", file=sys.stderr)
-    _emit(canonical_json(report.to_dict()) + "\n", None)
+    document = _tier0_report(tokenizer, tokenizer.lint()).to_dict()
+    _echo_warnings(document)
+    _emit(canonical_json(document) + "\n", None)
     return 0
+
+
+def _tier0_report(tokenizer: Tokenizer, tier0: Tier0Report) -> Report:
+    """A Tier 0 document: the tokenizer's manifest and nothing it did not run.
+
+    The parameter block records ``leading_space=False`` and
+    ``normalization=none`` because that is what happened: nothing here encodes
+    corpus text, and Tier 0's reachability check encodes each vocabulary entry
+    verbatim with no special tokens. Copying ``analyze``'s defaults in would put
+    a claim about text processing into a document that processed none. Shared
+    by ``lint`` and ``detect``.
+    """
+    return Report(
+        tier0=tier0,
+        manifest=Manifest(
+            tokenizer=tokenizer.manifest,
+            parameters=ParameterManifest(
+                leading_space=False,
+                normalization=Normalization.NONE,
+                add_special_tokens=False,
+            ),
+            environment=environment(),
+            backend=backend(),
+            glotscope_version=__version__,
+        ),
+        warnings=tokenizer.warnings,
+    )
 
 
 def _analyze(args: argparse.Namespace) -> int:
@@ -505,32 +533,14 @@ def _detect_report(
     omits the corpus rather than writing nulls into it — §9's nesting is what a
     reader uses to tell which tiers ran.
 
-    The parameter block records ``leading_space=False`` and
-    ``normalization=none`` because that is what happened: nothing here encodes
-    corpus text, and Tier 0's reachability check encodes each vocabulary entry
-    verbatim with no special tokens. Copying ``analyze``'s defaults in would put
-    a claim about text processing into a document that processed none.
+    The Tier 0 half, parameter block included, is :func:`_tier0_report` — the
+    same document ``lint`` writes.
 
     ``tier0`` is passed in rather than re-linted, because the caller has already
     computed it to size the embedding read.
     """
-    tier0_only = Report(
-        tier0=tier0,
-        manifest=Manifest(
-            tokenizer=tokenizer.manifest,
-            parameters=ParameterManifest(
-                leading_space=False,
-                normalization=Normalization.NONE,
-                add_special_tokens=False,
-            ),
-            environment=environment(),
-            backend=backend(),
-            glotscope_version=__version__,
-        ),
-        warnings=tokenizer.warnings,
-    )
     return attach_tier2(
-        tier0_only,
+        _tier0_report(tokenizer, tier0),
         tokenizer,
         embeddings,
         top_pct=top_pct,
