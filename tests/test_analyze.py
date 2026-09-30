@@ -19,12 +19,12 @@ from pathlib import Path
 
 import pytest
 from tokenizers import Tokenizer as BackendTokenizer
-from tokenizers import decoders, models, pre_tokenizers
+from tokenizers import decoders, models, normalizers, pre_tokenizers
 
 from glotscope import __version__, backend
 from glotscope.corpus import Corpus, LoadedCorpus
 from glotscope.enums import Capability, Normalization, Segmenter
-from glotscope.errors import CapabilityError, SegmenterRequiredError, UnkRateExceededError
+from glotscope.errors import CapabilityError, SegmenterRequiredError
 from glotscope.lint import byte_to_unicode
 from glotscope.manifest import Manifest, canonical_json, environment
 from glotscope.report import Report
@@ -246,6 +246,16 @@ def test_a_trained_segmenter_without_its_model_is_refused_rather_than_recorded(
         _tokenizer(tmp_path).analyze(_parallel(tmp_path), segmenter=Segmenter.STANZA)
 
 
+def _wordpiece(tmp_path: Path) -> Tokenizer:
+    backend_tokenizer = BackendTokenizer(
+        models.WordPiece(vocab={"[UNK]": 0, "the": 1, "cat": 2}, unk_token="[UNK]")
+    )
+    backend_tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+    path = tmp_path / "wordpiece.json"
+    backend_tokenizer.save(str(path))
+    return Tokenizer.from_file(path)
+
+
 def test_a_language_the_tokenizer_cannot_represent_is_dropped(tmp_path: Path) -> None:
     """§7.1 rule 6, exercised through ``analyze`` rather than only in isolation.
 
@@ -254,22 +264,34 @@ def test_a_language_the_tokenizer_cannot_represent_is_dropped(tmp_path: Path) ->
     it and the wiring would go untested. This uses a WordPiece vocabulary that
     covers two English words and nothing else, which is the shape of tokenizer
     the rule was written for: FlanT5 fails it on 42% of FLORES-200 languages.
+
+    Hindi is over the line and English is not, and the rule drops the
+    *language*. Raising out of ``analyze`` instead threw English's numbers away
+    with it, which no reading of "drop" allows.
     """
-    backend_tokenizer = BackendTokenizer(
-        models.WordPiece(vocab={"[UNK]": 0, "the": 1, "cat": 2}, unk_token="[UNK]")
-    )
-    backend_tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
-    path = tmp_path / "wordpiece.json"
-    backend_tokenizer.save(str(path))
-    tokenizer = Tokenizer.from_file(path)
+    corpus = Corpus.flores_plus(["eng_Latn", "hin_Deva"])
+    _write(tmp_path, corpus, eng_Latn=("the cat", "cat the"), hin_Deva=_HINDI)
 
-    corpus = Corpus.fineweb2(version=_SAMPLE, languages=["hin_Deva"])
-    directory = tmp_path / corpus.spec.id / corpus.version / corpus.split
-    directory.mkdir(parents=True)
-    (directory / "hin_Deva.txt").write_text("\n".join(_HINDI) + "\n", encoding="utf-8")
+    report = _wordpiece(tmp_path).analyze(corpus.load(tmp_path), segmenter=Segmenter.WHITESPACE)
 
-    with pytest.raises(UnkRateExceededError, match="hin_Deva"):
-        tokenizer.analyze(corpus.load(tmp_path), segmenter=Segmenter.WHITESPACE)
+    assert set(report.fertility) == {"eng_Latn"}
+    hindi = report.per_language["hin_Deva"]
+    assert hindi.fertility is None
+    # Only fertility is excluded; the language's other numbers still stand.
+    assert hindi.compression.ctc > 0
+    assert "fertility" not in report.to_dict()["per_language"]["hin_Deva"]
+    [warning] = [w for w in report.warnings if "hin_Deva" in w and "[UNK]" in w]
+    assert "§7.1 rule 6" in warning
+
+
+def test_a_run_where_every_language_is_dropped_still_returns(tmp_path: Path) -> None:
+    corpus = Corpus.fineweb2(["hin_Deva"], version=_SAMPLE)
+    _write(tmp_path, corpus, hin_Deva=_HINDI)
+
+    report = _wordpiece(tmp_path).analyze(corpus.load(tmp_path), segmenter=Segmenter.WHITESPACE)
+
+    assert report.fertility == {}
+    assert sum("[UNK]" in warning for warning in report.warnings) == 1
 
 
 def test_a_built_segmenter_produces_fertility(tmp_path: Path) -> None:
@@ -326,3 +348,100 @@ def test_word_level_metrics_still_refuse_without_a_segmenter(tmp_path: Path) -> 
 
     with pytest.raises(SegmenterRequiredError):
         _ = report.fertility
+
+
+def _unigram(tmp_path: Path, *, unk_id: int | None) -> Tokenizer:
+    pieces = [("a", -1.0), ("b", -1.0), ("c", -1.0), ("abc", -0.5)]
+    vocab = [("<unk>", 0.0), *pieces] if unk_id is not None else pieces
+    backend_tokenizer = BackendTokenizer(models.Unigram(vocab, unk_id=unk_id))
+    backend_tokenizer.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
+    path = tmp_path / "unigram.json"
+    backend_tokenizer.save(str(path))
+    return Tokenizer.from_file(path)
+
+
+def test_a_unigram_tokenizer_reports_the_characters_it_maps_to_unk(tmp_path: Path) -> None:
+    """§7.1 rule 6 for the family it was written for.
+
+    A Unigram ``tokenizer.json`` stores its UNK as ``unk_id`` and names no
+    ``unk_token``: T5, mT5, Flan-T5 and XLM-R all look like this. Reading only the
+    name left every one of them at an UNK rate of 0.0, so the exclusion could
+    never fire for FlanT5 — the tokenizer the rule is quoted against.
+    """
+    tokenizer = _unigram(tmp_path, unk_id=0)
+
+    # Thirteen characters, of which "x" alone is unrepresentable: 1/13, under 10%.
+    report = tokenizer.analyze(
+        _monolingual(tmp_path, "abc abc abc x"), segmenter=Segmenter.WHITESPACE
+    )
+
+    english = report.per_language["eng_Latn"].fertility
+    assert english is not None
+    assert english.unk_char_rate == pytest.approx(1 / 13)
+
+
+def test_a_unigram_tokenizer_without_an_unk_records_none(tmp_path: Path) -> None:
+    # `unk_id: null` is legal. It must read as "no UNK", not crash on the lookup.
+    report = _unigram(tmp_path, unk_id=None).analyze(
+        _monolingual(tmp_path, "abc abc"), segmenter=Segmenter.WHITESPACE
+    )
+
+    english = report.per_language["eng_Latn"].fertility
+    assert english is not None
+    assert english.unk_char_rate == 0.0
+
+
+def _prepending(tmp_path: Path) -> Tokenizer:
+    """A Llama-2-style tokenizer: its normalizer prepends ``▁`` to every input."""
+    backend_tokenizer = BackendTokenizer(
+        models.Unigram([("<unk>", 0.0), ("▁", -2.0), ("▁the", -1.0), ("▁cat", -1.0)], unk_id=0)
+    )
+    backend_tokenizer.normalizer = normalizers.Sequence(
+        [normalizers.Prepend("▁"), normalizers.Replace(" ", "▁")]
+    )
+    path = tmp_path / "prepending.json"
+    backend_tokenizer.save(str(path))
+    return Tokenizer.from_file(path)
+
+
+def test_a_tokenizer_that_prepends_its_own_boundary_gets_no_second_one(tmp_path: Path) -> None:
+    """§7.1 rule 5 on a Llama-2-style tokenizer.
+
+    The leading-space convention asks for the word as it appears mid-sentence.
+    A byte-level tokenizer needs a literal space for that; this one prepends ``▁``
+    to every input itself, so a literal space became a second marker —
+    ``" the"`` encoded as ``['▁', '▁the']`` — and fertility rose by exactly one.
+    """
+    report = _prepending(tmp_path).analyze(
+        _monolingual(tmp_path, "the cat", "cat the"), segmenter=Segmenter.WHITESPACE
+    )
+
+    english = report.per_language["eng_Latn"].fertility
+    assert english is not None
+    assert english.fertility == 1.0
+    assert english.leading_space is True
+    assert sum("prepends '▁'" in warning for warning in report.warnings) == 1
+
+
+def test_without_a_leading_space_a_prepending_tokenizer_is_left_alone(tmp_path: Path) -> None:
+    report = _prepending(tmp_path).analyze(
+        _monolingual(tmp_path, "the cat"), segmenter=Segmenter.WHITESPACE, leading_space=False
+    )
+
+    english = report.per_language["eng_Latn"].fertility
+    assert english is not None
+    assert english.fertility == 1.0
+    assert not any("prepends '▁'" in warning for warning in report.warnings)
+
+
+def test_strr_on_a_prepending_tokenizer_counts_no_phantom_boundary(tmp_path: Path) -> None:
+    # τ(" the") on this tokenizer is ['▁', '▁the'] only because the word was
+    # encoded alone; the leading-space convention is the mid-sentence form, ['▁the'].
+    corpus = Corpus.resolve("strr_wordlists", ["eng_Latn"], version="1", split="train")
+    _write(tmp_path, corpus, eng_Latn=("the", "cat"))
+
+    report = _prepending(tmp_path).analyze(corpus.load(tmp_path))
+
+    strr = report.per_language["eng_Latn"].strr
+    assert strr is not None
+    assert (strr.bare, strr.leading_space) == (100.0, 100.0)

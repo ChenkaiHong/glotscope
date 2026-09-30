@@ -124,12 +124,32 @@ class UdpipeSegmenter:
         error = self.error_factory()
         words: list[str] = []
         while self.tokenizer.nextSentence(sentence, error):
-            # UDPipe puts a root token at index 0 of every sentence; it is
-            # structural and has no surface form, so it is dropped rather than
-            # counted as an empty word.
-            words.extend(word.form for word in sentence.words if word.form.strip())
+            words.extend(form for form in _surface_forms(sentence) if form.strip())
             sentence = self.sentence_factory()
         return tuple(words)
+
+
+def _surface_forms(sentence: Any) -> list[str]:
+    """One UDPipe sentence's surface tokens, in order.
+
+    ``sentence.words`` is the syntactic layer: word 0 is the structural root,
+    whose form is ``<root>`` rather than empty, and a contraction such as Spanish
+    ``al`` appears as ``a`` + ``el``. A multiword token spans ``idFirst`` to
+    ``idLast`` and carries the form actually written, which is what a tokenizer
+    sees — the same rule :mod:`glotscope.conllu` applies to gold annotation.
+    """
+    by_first = {token.idFirst: token for token in sentence.multiwordTokens}
+    forms: list[str] = []
+    index = 1
+    while index < len(sentence.words):
+        token = by_first.get(index)
+        if token is None:
+            forms.append(sentence.words[index].form)
+            index += 1
+        else:
+            forms.append(token.form)
+            index = token.idLast + 1
+    return forms
 
 
 @dataclass(frozen=True, slots=True)

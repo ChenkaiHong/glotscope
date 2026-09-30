@@ -195,3 +195,24 @@ def test_a_file_udpipe_cannot_read_is_refused(
 
     with pytest.raises(FileNotFoundError, match="could not read"):
         get_segmenter(Segmenter.UDPIPE, language="eng_Latn", model=_model_file(tmp_path))
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Vamos al cine.", ("Vamos", "al", "cine", ".")),
+        ("Es la casa del", ("Es", "la", "casa", "del")),
+    ],
+)
+def test_udpipe_counts_a_contraction_once_as_it_is_written(
+    text: str, expected: tuple[str, ...], tmp_path: Path, fake_udpipe: dict[str, Any]
+) -> None:
+    """Surface tokens, not syntactic words — the rule conllu.py applies to gold.
+
+    ``al`` is one word a tokenizer sees; ``a`` + ``el`` are two it never does, and
+    counting them inflates the fertility denominator for every language that writes
+    contractions. The structural ``<root>`` is not a word at all.
+    """
+    adapter = get_segmenter(Segmenter.UDPIPE, language="spa_Latn", model=_model_file(tmp_path))
+
+    assert adapter.segment(text) == expected

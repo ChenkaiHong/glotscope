@@ -36,10 +36,11 @@ from glotscope.enums import (
 from glotscope.errors import (
     NoReferenceSetError,
     TokenizerLoadError,
+    UnkRateExceededError,
     UnsupportedCheckpointError,
 )
 from glotscope.fertility import fertility
-from glotscope.lint import detect_algorithm, lint_backend, token_bytes
+from glotscope.lint import detect_algorithm, lint_backend, prepends_word_boundary, token_bytes
 from glotscope.manifest import UNKNOWN_LICENSE, ParameterManifest, TokenizerManifest
 from glotscope.morphology import AlignedWord, morphology, pieces_from_offsets
 from glotscope.morphynet import GoldSegmentations, parse_morphynet
@@ -62,7 +63,7 @@ from glotscope.utf8 import classify_utf8_token
 if TYPE_CHECKING:
     from glotscope.embeddings import Embeddings
 
-__all__ = ["Tokenizer"]
+__all__ = ["HUB_SOURCE", "Tokenizer", "unpinned_warning"]
 
 _LOCAL_REVISION = "local"
 """Recorded where an upstream revision does not exist. A local file has no commit
@@ -100,6 +101,13 @@ _NO_NORMALIZATION_WARNING = (
     "another run over identically encoded text"
 )
 
+_PREPENDED_BOUNDARY_WARNING = (
+    "this tokenizer's normalizer prepends '▁' to every input, which is the "
+    "word-initial marker a leading space stands for, so words are encoded without "
+    "a literal space: one would add a standalone '▁' token to every word (§7.1 "
+    "rule 5). The leading-space convention is still what was measured"
+)
+
 _ANALYSIS_BATCH_SIZE = 8192
 """Maximum documents whose normalized text and encodings are live together."""
 
@@ -126,6 +134,22 @@ _UNPINNED_WARNING = (
     "command can resolve somewhere else, which is what §16.1's nightly job "
     "exists to catch"
 )
+
+HUB_SOURCE = "huggingface"
+"""``TokenizerManifest.source`` for a tokenizer fetched from the Hub. Named because
+``verify`` reads it back: a result from the Hub is regenerated from the Hub."""
+
+
+def unpinned_warning(model_id: str, resolved: str) -> str:
+    """The warning an unpinned Hub load records.
+
+    A function rather than a format call at the one site, because ``verify`` has
+    to recognise it: the warnings array is the only place a document says its run
+    did not pin, and regenerating that run means not pinning either.
+    """
+    return _UNPINNED_WARNING.format(model_id=model_id, resolved=resolved)
+
+
 _NO_HUB_CONFIG_WARNING = (
     "this repository publishes no config.json, so vocab_size_config is recorded "
     "as null; §7.9's reference chain reads the gap between it and the "
@@ -257,6 +281,15 @@ def _normalized(text: str, form: Normalization) -> str:
     return unicodedata.normalize(unicode_form, text)
 
 
+def _unk_exclusion_warning(excluded: UnkRateExceededError) -> str:
+    return (
+        f"{excluded.language}: excluded from fertility — {excluded.rate:.1%} of its "
+        f"characters map to [UNK], above the {excluded.threshold:.0%} threshold "
+        f"(§7.1 rule 6). The exclusion covers fertility and P_cont; the language's "
+        f"compression and round-trip numbers are still reported"
+    )
+
+
 def _empty_document_warning(language: str, count: int) -> str:
     return (
         f"{language}: {count} document(s) encoded to zero tokens. They are counted "
@@ -364,11 +397,20 @@ def _unk_token_id(backend: BackendTokenizer, spec: Mapping[str, Any]) -> int | N
 
     Byte-level BPE has no UNK by construction — every byte is representable — so
     ``None`` here means the >10% exclusion rule cannot fire, not that it passed.
+
+    ``tokenizer.json`` spells it two ways. BPE, WordPiece and WordLevel name the
+    token (``unk_token``); Unigram stores only its id (``unk_id``). Reading the
+    name alone left the rule inert for exactly the family it was written for —
+    T5, mT5, Flan-T5 and XLM-R are all Unigram.
     """
-    unk_token = spec.get("model", {}).get("unk_token")
-    if not isinstance(unk_token, str):
-        return None
-    return backend.token_to_id(unk_token)
+    model = spec.get("model") or {}
+    unk_token = model.get("unk_token")
+    if isinstance(unk_token, str):
+        return backend.token_to_id(unk_token)
+    unk_id = model.get("unk_id")
+    if isinstance(unk_id, int) and not isinstance(unk_id, bool):
+        return unk_id
+    return None
 
 
 def _unk_char_count(encodings: Sequence[Any], unk_id: int | None) -> int:
@@ -511,7 +553,7 @@ class Tokenizer:
 
         warnings: list[str] = []
         if revision is None:
-            warnings.append(_UNPINNED_WARNING.format(model_id=model_id, resolved=resolved))
+            warnings.append(unpinned_warning(model_id, resolved))
         algorithm = detect_algorithm(spec)
         if algorithm is Algorithm.UNKNOWN:
             warnings.append(_UNKNOWN_ALGORITHM_WARNING)
@@ -529,7 +571,7 @@ class Tokenizer:
             vocab_size_config=vocab_size_config,
             embedding_rows=None,
             algorithm=algorithm,
-            source="huggingface",
+            source=HUB_SOURCE,
             source_is_mirror=is_mirror,
             license_spdx=card.get("license") or UNKNOWN_LICENSE,
         )
@@ -764,6 +806,10 @@ class Tokenizer:
         Word-level metrics then raise :class:`SegmenterRequiredError` on access
         rather than silently picking a convention (D6).
 
+        A language where more than 10% of the characters map to ``[UNK]`` is
+        **dropped from fertility** (§7.1 rule 6): its fertility and P_cont are
+        absent and a warning names it and its rate. The rest of the run stands.
+
         A corpus declaring :attr:`~glotscope.enums.Capability.MORPH_GOLD` turns
         this into a **morphology run**: its rows are parsed as MorphyNet
         inflectional gold, the surface forms become the documents every other
@@ -773,8 +819,12 @@ class Tokenizer:
         morphology number came from. CPT and round-trip in such a run therefore
         describe a word list, which is what was measured.
 
-        ``leading_space`` defaults to ``True`` for byte-level BPE per §7.1 rule 5,
-        and is recorded either way. It can move STRR by tens of points.
+        ``leading_space`` defaults to ``True`` (§7.1 rule 5) and means the word as
+        it appears mid-sentence, which is ``" the"`` for a byte-level tokenizer. A
+        tokenizer whose normalizer prepends ``▁`` to every input — Llama-2 style —
+        already supplies that marker, so no literal space is added (one would
+        become a second ``▁`` token per word) and a warning says so. Recorded
+        either way; it can move STRR by tens of points.
 
         ``normalization`` is recorded because NFKC versus NFC shifts CPT, STRR and
         round-trip losslessness. It is applied *before* anything is measured, and
@@ -830,6 +880,12 @@ class Tokenizer:
         warnings: list[str] = []
         if normalization is Normalization.NONE:
             warnings.append(_NO_NORMALIZATION_WARNING)
+        supplies_boundary = prepends_word_boundary(self._spec)
+        if supplies_boundary and (
+            (segmenter is not None and leading_space)
+            or Capability.WORDLIST in loaded.corpus.capabilities
+        ):
+            warnings.append(_PREPENDED_BOUNDARY_WARNING)
 
         per_language: dict[str, LanguageMetrics] = {}
         segmenter_versions: dict[str, str] = {}
@@ -920,24 +976,29 @@ class Tokenizer:
                     for document in documents
                     for word in adapter.segment(_normalized(document, normalization))
                 ]
-                words = fertility(
-                    aggregate_words(
-                        _word_encodings(
-                            self._backend,
-                            segmented,
-                            leading_space=leading_space,
-                            # Never on a word: a special token per word would be
-                            # counted as part of the word's tokenization and
-                            # inflate fertility by one for every word.
-                            add_special_tokens=False,
-                        )
-                    ),
-                    language=language,
-                    segmenter=segmenter,
-                    segmenter_model_version=effective_version,
-                    leading_space=leading_space,
-                    unk_char_rate=(unk_chars / stats.total_chars if stats.total_chars else 0.0),
-                )
+                try:
+                    words = fertility(
+                        aggregate_words(
+                            _word_encodings(
+                                self._backend,
+                                segmented,
+                                leading_space=leading_space and not supplies_boundary,
+                                # Never on a word: a special token per word would be
+                                # counted as part of the word's tokenization and
+                                # inflate fertility by one for every word.
+                                add_special_tokens=False,
+                            )
+                        ),
+                        language=language,
+                        segmenter=segmenter,
+                        segmenter_model_version=effective_version,
+                        leading_space=leading_space,
+                        unk_char_rate=(unk_chars / stats.total_chars if stats.total_chars else 0.0),
+                    )
+                except UnkRateExceededError as excluded:
+                    # §7.1 rule 6 drops the language. Raising here dropped the
+                    # whole run instead — every other language's numbers with it.
+                    warnings.append(_unk_exclusion_warning(excluded))
             per_language[language] = LanguageMetrics(
                 language=language,
                 compression=compression(
@@ -1004,7 +1065,14 @@ class Tokenizer:
                 _word_encodings(self._backend, words, leading_space=False, add_special_tokens=False)
             ),
             aggregate_words(
-                _word_encodings(self._backend, words, leading_space=True, add_special_tokens=False)
+                _word_encodings(
+                    self._backend,
+                    words,
+                    # The mid-sentence form. A tokenizer that prepends its own
+                    # marker supplies it already; a literal space would double it.
+                    leading_space=not prepends_word_boundary(self._spec),
+                    add_special_tokens=False,
+                )
             ),
             language=language,
             # The lists ship as written; glotscope does not case-fold them, and

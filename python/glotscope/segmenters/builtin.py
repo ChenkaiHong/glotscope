@@ -57,11 +57,15 @@ class IcuSegmenter:
     def segment(self, text: str) -> tuple[str, ...]:
         icu = import_or_refuse(Segmenter.ICU, "icu", "PyICU")
         iterator = icu.BreakIterator.createWordInstance(icu.Locale(self.locale))
-        iterator.setText(text)
+        # ICU counts UTF-16 code units and a Python str counts code points; the two
+        # part ways at the first character outside the BMP. Slicing ICU's own
+        # string keeps boundaries and text in one index space.
+        units = icu.UnicodeString(text)
+        iterator.setText(units)
         words: list[str] = []
         start = 0
         for boundary in iterator:
-            candidate = text[start:boundary]
+            candidate = str(units[start:boundary])
             # ICU's boundaries include the whitespace runs between words.
             # Dropping the blank spans leaves words; dropping punctuation too
             # would change what W(D) means, so it is kept.

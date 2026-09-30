@@ -57,7 +57,7 @@ from glotscope.reporting import attach_tier2
 from glotscope.reporting import build_report as _build_report
 from glotscope.segmenters import requires_model
 from glotscope.segmenters.trained import model_digest, recorded_digest, require_model
-from glotscope.tokenizer import Tokenizer
+from glotscope.tokenizer import HUB_SOURCE, Tokenizer, unpinned_warning
 
 __all__ = ["build_parser", "main"]
 
@@ -331,7 +331,9 @@ def build_parser() -> argparse.ArgumentParser:
             "the tokenizer.json the result describes. Required because §9 keeps "
             "filesystem paths out of the manifest, so the document records what "
             "the artifact is (a SHA-256) but not where it lives. The hash is "
-            "checked against the manifest before anything is recomputed."
+            "checked against the manifest before anything is recomputed. For a "
+            "result produced from the Hub, pass the repository id it records; it "
+            "is re-fetched at the recorded revision."
         ),
     )
     verify.add_argument(
@@ -620,15 +622,7 @@ def _verify(args: argparse.Namespace) -> int:
             f"manifest, so there is nothing to regenerate from."
         )
 
-    tokenizer = _load_tokenizer(args.tokenizer, None)
-    recorded = manifest["tokenizer"]["tokenizer_json_sha256"]
-    if tokenizer.manifest.tokenizer_json_sha256 != recorded:
-        raise TokenizerLoadError(
-            args.tokenizer,
-            f"tokenizer_json_sha256 {tokenizer.manifest.tokenizer_json_sha256} does "
-            f"not match the {recorded} this result was produced with. The manifest "
-            f"pins the artifact by hash and by nothing else",
-        )
+    tokenizer = _pinned_tokenizer(args, committed, manifest)
 
     # Dispatch on which tiers the document declares, not on the presence of a
     # corpus. Keying off the corpus alone refused every Tier 2 result — `detect`
@@ -665,6 +659,56 @@ def _verify(args: argparse.Namespace) -> int:
             f"{backend().value} — backend parity holds for this result."
         )
     return 0
+
+
+def _pinned_tokenizer(
+    args: argparse.Namespace, committed: Mapping[str, Any], manifest: Mapping[str, Any]
+) -> Tokenizer:
+    """``--tokenizer``, loaded the way the result's own run loaded it, once it is
+    known to be the artifact the manifest pins.
+
+    A local file or a tiktoken encoding reloads as it was. A Hub tokenizer is
+    re-fetched **at the commit the manifest records**, with the mirror flag it
+    records: reloading it unpinned fetched whatever the branch holds now and
+    added an unpinned warning the committed document never carried, so no Hub
+    result could verify. A run that was itself unpinned says so in its warnings
+    and is regenerated unpinned in turn — the document claims that invocation,
+    and its own warning predicts the failure once the branch moves.
+
+    Raises:
+        ValueError: if the result came from the Hub and ``--tokenizer`` names
+            anything but the repository it records. A local copy of the
+            ``tokenizer.json`` cannot stand in: the manifest also records the
+            config's vocabulary size and the card's license, which only the
+            repository answers.
+        TokenizerLoadError: if the artifact is not the one the manifest pins.
+    """
+    recorded = manifest["tokenizer"]
+    revision: str | None = None
+    is_mirror = False
+    if recorded["source"] == HUB_SOURCE:
+        if args.tokenizer != recorded["id"]:
+            raise ValueError(
+                f"{args.result!r} was produced from the Hub repository "
+                f"{recorded['id']!r} at revision {recorded['revision']}, and is "
+                f"regenerated from there: pass --tokenizer {recorded['id']}. "
+                f"{args.tokenizer!r} cannot stand in, because the manifest also "
+                f"records what only the repository answers — the config's "
+                f"vocabulary size and the card's license."
+            )
+        unpinned = unpinned_warning(recorded["id"], recorded["revision"])
+        revision = None if unpinned in committed.get("warnings", ()) else recorded["revision"]
+        is_mirror = bool(recorded["source_is_mirror"])
+
+    tokenizer = _load_tokenizer(args.tokenizer, revision, is_mirror=is_mirror)
+    if tokenizer.manifest.tokenizer_json_sha256 != recorded["tokenizer_json_sha256"]:
+        raise TokenizerLoadError(
+            args.tokenizer,
+            f"tokenizer_json_sha256 {tokenizer.manifest.tokenizer_json_sha256} does "
+            f"not match the {recorded['tokenizer_json_sha256']} this result was "
+            f"produced with. The manifest pins the artifact by hash and by nothing else",
+        )
+    return tokenizer
 
 
 def _regenerate(

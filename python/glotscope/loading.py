@@ -46,7 +46,7 @@ identifier cannot contain a colon, so the two namespaces cannot collide.
 """
 
 
-def load_tokenizer(source: str, revision: str | None) -> Tokenizer:
+def load_tokenizer(source: str, revision: str | None, *, is_mirror: bool = False) -> Tokenizer:
     """Load the tokenizer named on the command line.
 
     An OpenAI encoding behind ``tiktoken:``, a local ``tokenizer.json``, a
@@ -58,6 +58,9 @@ def load_tokenizer(source: str, revision: str | None) -> Tokenizer:
     A Hub identifier resolves to a commit SHA and that SHA is what the manifest
     records, so a row can never silently name one artifact and analyse another —
     the failure §11 exists to prevent.
+
+    ``is_mirror`` is recorded for a Hub tokenizer; a local file and an encoding
+    have no upstream to mirror.
 
     Raises:
         TokenizerLoadError: the source names a place on this disk holding no
@@ -90,7 +93,7 @@ def load_tokenizer(source: str, revision: str | None) -> Tokenizer:
             if revision is None
             else "--revision selects a commit on the Hub, and this names a local path",
         )
-    return Tokenizer.from_pretrained(source, revision=revision)
+    return Tokenizer.from_pretrained(source, revision=revision, is_mirror=is_mirror)
 
 
 def load_embeddings(source: str, *, vocab_size: int, revision: str | None = None) -> Embeddings:

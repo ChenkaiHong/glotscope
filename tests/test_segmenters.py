@@ -182,3 +182,36 @@ def test_an_unavailable_extra_names_the_install_command() -> None:
 
 def test_available_is_honest_about_whitespace() -> None:
     assert available(Segmenter.WHITESPACE)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "😀 hello world",
+        "𠀀𠀁 abc def",
+        # Mathematical bold capitals, escaped: they render as ordinary A, B, C.
+        "a \U0001d400\U0001d401 b c",
+        "\U0001d400\U0001d401\U0001d402",
+    ],
+)
+def test_icu_words_spell_the_text_past_a_character_outside_the_bmp(text: str) -> None:
+    """ICU reports boundaries in UTF-16 code units; a Python ``str`` indexes code
+    points. The two part ways at the first character outside the BMP — an emoji,
+    a CJK Extension B ideograph, a mathematical letter — and every slice after it
+    lands mid-word. Whatever ICU decides a word is, the words must spell the text."""
+    _require(Segmenter.ICU)
+
+    words = get_segmenter(Segmenter.ICU, language="eng_Latn").segment(text)
+
+    assert "".join(words) == "".join(text.split())
+    assert all(word == word.strip() for word in words)
+
+
+def test_icu_keeps_an_emoji_and_the_words_after_it_whole() -> None:
+    _require(Segmenter.ICU)
+
+    assert get_segmenter(Segmenter.ICU, language="eng_Latn").segment("😀 hello world") == (
+        "😀",
+        "hello",
+        "world",
+    )

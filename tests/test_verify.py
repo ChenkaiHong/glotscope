@@ -31,7 +31,10 @@ from tokenizers import decoders, models, pre_tokenizers
 from _safetensors import f32, write_safetensors
 from glotscope.cli import main
 from glotscope.corpus import Corpus
+from glotscope.enums import Normalization, RenyiNormalizer
 from glotscope.lint import byte_to_unicode
+from glotscope.reporting import build_report
+from glotscope.tokenizer import Tokenizer
 
 _ENGLISH = ("The cat sat.", "It rained.")
 _HINDI = ("बिल्ली बैठी।", "बारिश हुई।")
@@ -81,7 +84,7 @@ def _produce(tmp_path: Path, *extra: str) -> tuple[Path, Path]:
     return tokenizer, result
 
 
-def _verify(tokenizer: Path, result: Path, root: Path) -> list[str]:
+def _verify(tokenizer: Path | str, result: Path, root: Path) -> list[str]:
     return ["verify", str(result), "--tokenizer", str(tokenizer), "--corpus-root", str(root)]
 
 
@@ -366,3 +369,140 @@ def test_the_wrong_segmenter_model_fails_on_identity_not_on_the_numbers(
 
     assert exit_code == 1
     assert "sha256" in capsys.readouterr().err
+
+
+# -- a result produced from the Hub -------------------------------------------
+
+_RESOLVED = "b" * 40
+"""The commit the mocked Hub resolves its default branch to."""
+
+
+class _ModelInfo:
+    def __init__(self, sha: str) -> None:
+        self.sha = sha
+        self.card_data = {"license": "apache-2.0"}
+
+
+def _mock_hub(
+    monkeypatch: pytest.MonkeyPatch, repo: Path, *, sha: str = _RESOLVED
+) -> list[str | None]:
+    """Serve ``repo`` as a Hub repository; return every revision a call asked for."""
+    import huggingface_hub
+
+    asked: list[str | None] = []
+
+    def _download(repo_id: str, filename: str, *, revision: str | None = None, **_: Any) -> str:
+        asked.append(revision)
+        return str(repo / filename)
+
+    def _model_info(repo_id: str, *, revision: str | None = None, **_: Any) -> _ModelInfo:
+        asked.append(revision)
+        return _ModelInfo(sha)
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", _download)
+    monkeypatch.setattr(huggingface_hub, "model_info", _model_info)
+    return asked
+
+
+def _hub_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "hub"
+    repo.mkdir()
+    _tokenizer_json(repo / "tokenizer.json")
+    (repo / "config.json").write_text(json.dumps({"vocab_size": 256}), encoding="utf-8")
+    return repo
+
+
+def _produce_from_hub(tmp_path: Path, *extra: str) -> Path:
+    _corpus(tmp_path)
+    result = tmp_path / "result.json"
+    argv = [
+        "analyze",
+        "acme/model",
+        "--corpus",
+        "flores_plus",
+        "--corpus-root",
+        str(tmp_path),
+        "--languages",
+        "eng_Latn,hin_Deva",
+        "--out",
+        str(result),
+        *extra,
+    ]
+    assert main(argv) == 0
+    return result
+
+
+def test_a_pinned_hub_result_verifies_at_the_commit_it_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Nine of the thirteen published board rows are this shape.
+
+    Verify used to reload every tokenizer unpinned, so a pinned Hub result came
+    back with a warning its document never carried, and failed.
+    """
+    asked = _mock_hub(monkeypatch, _hub_repo(tmp_path))
+    result = _produce_from_hub(tmp_path, "--revision", _RESOLVED)
+    asked.clear()
+
+    assert main(_verify("acme/model", result, tmp_path)) == 0
+    assert "reproduced" in capsys.readouterr().out
+    assert asked and set(asked) == {_RESOLVED}
+
+
+def test_an_unpinned_hub_result_is_regenerated_unpinned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The document says its run did not pin; regenerating that run does not pin either.
+    _mock_hub(monkeypatch, _hub_repo(tmp_path))
+    result = _produce_from_hub(tmp_path)
+
+    assert main(_verify("acme/model", result, tmp_path)) == 0
+
+
+def test_an_unpinned_result_fails_once_its_branch_moves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Exactly what the unpinned warning in the document predicts.
+    repo = _hub_repo(tmp_path)
+    _mock_hub(monkeypatch, repo)
+    result = _produce_from_hub(tmp_path)
+    _mock_hub(monkeypatch, repo, sha="c" * 40)
+
+    assert main(_verify("acme/model", result, tmp_path)) == 1
+    assert "manifest.tokenizer.revision" in capsys.readouterr().err
+
+
+def test_a_local_copy_cannot_stand_in_for_a_hub_tokenizer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _hub_repo(tmp_path)
+    _mock_hub(monkeypatch, repo)
+    result = _produce_from_hub(tmp_path, "--revision", _RESOLVED)
+
+    assert main(_verify(repo / "tokenizer.json", result, tmp_path)) == 1
+    assert "--tokenizer acme/model" in capsys.readouterr().err
+
+
+def test_a_mirror_result_verifies_as_a_mirror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_hub(monkeypatch, _hub_repo(tmp_path))
+    loaded = _corpus(tmp_path).load(tmp_path)
+    tokenizer = Tokenizer.from_pretrained("acme/model", revision=_RESOLVED, is_mirror=True)
+    report = build_report(
+        tokenizer,
+        loaded,
+        leading_space=True,
+        normalization=Normalization.NFC,
+        add_special_tokens=False,
+        segmenter=None,
+        parity_reference=None,
+        gini=False,
+        renyi_alpha=None,
+        renyi_normalizer=RenyiNormalizer.OBSERVED,
+        nominal_vocab_size=None,
+    )
+    result = tmp_path / "result.json"
+    report.to_json(result)
+
+    assert main(_verify("acme/model", result, tmp_path)) == 0

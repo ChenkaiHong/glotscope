@@ -31,6 +31,7 @@ __all__ = [
     "classify_family",
     "detect_algorithm",
     "lint_backend",
+    "prepends_word_boundary",
     "special_ids",
     "token_bytes",
     "unreachable_ids",
@@ -148,6 +149,19 @@ def detect_algorithm(spec: Mapping[str, Any]) -> Algorithm:
     return Algorithm.UNKNOWN
 
 
+def prepends_word_boundary(spec: Mapping[str, Any]) -> bool:
+    """Whether the normalizer puts a marker in front of every input (§7.1 rule 5).
+
+    Llama-2-style ``tokenizer.json`` files carry ``Prepend("▁")`` then
+    ``Replace(" ", "▁")``, so the tokenizer supplies the word-initial marker
+    itself and a literal leading space becomes a second one: ``" walked"``
+    encodes as ``['▁', '▁walked']``. Metaspace's ``prepend_scheme`` and
+    ByteLevel's ``add_prefix_space`` skip text that already starts with a
+    boundary, so neither doubles and neither is matched here.
+    """
+    return _mentions_type(spec.get("normalizer"), "Prepend")
+
+
 def vocab_bytes(vocab: Mapping[str, int], family: TokenizerFamily) -> dict[int, bytes]:
     """Map token id to the bytes it stands for, across a whole vocabulary."""
     return {token_id: token_bytes(token, family) for token, token_id in vocab.items()}
@@ -224,5 +238,10 @@ def _mentions_type(component: Any, wanted: str) -> bool:
         return False
     if component.get("type") == wanted:
         return True
-    nested = component.get("decoders") or component.get("pretokenizers") or []
+    nested = (
+        component.get("decoders")
+        or component.get("pretokenizers")
+        or component.get("normalizers")
+        or []
+    )
     return any(_mentions_type(child, wanted) for child in nested)

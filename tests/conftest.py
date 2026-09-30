@@ -30,11 +30,34 @@ def fake_udpipe(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         def __init__(self, form: str) -> None:
             self.form = form
 
+    class _MultiwordToken:
+        def __init__(self, id_first: int, id_last: int, form: str) -> None:
+            self.idFirst = id_first
+            self.idLast = id_last
+            self.form = form
+
+    contractions = {"al": ("a", "el"), "del": ("de", "el")}
+
     class _Sentence:
         def __init__(self, text: str) -> None:
-            # A deliberately un-whitespace-like split, so a silent fallback to
-            # whitespace segmentation cannot pass these tests.
-            self.words = [_Word("")] + [_Word(part) for part in text.replace(".", " .").split()]
+            # UDPipe's word 0 is the structural root, and its form is "<root>" —
+            # checked against ufal.udpipe 1.4, where it is not empty. A deliberately
+            # un-whitespace-like split, so a silent fallback to whitespace
+            # segmentation cannot pass these tests; contractions expand the way a
+            # UD model's tokenizer expands them, into syntactic words under one
+            # multiword token.
+            self.words = [_Word("<root>")]
+            self.multiwordTokens: list[_MultiwordToken] = []
+            for part in text.replace(".", " .").split():
+                expansion = contractions.get(part)
+                if expansion is None:
+                    self.words.append(_Word(part))
+                    continue
+                first = len(self.words)
+                self.words.extend(_Word(word) for word in expansion)
+                self.multiwordTokens.append(
+                    _MultiwordToken(first, first + len(expansion) - 1, part)
+                )
 
     class _Model:
         DEFAULT = "default"
@@ -56,13 +79,15 @@ def fake_udpipe(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             if getattr(self, "_done", False):
                 return False
             self._done = True
-            sentence.words = _Sentence(self._text).words
+            parsed = _Sentence(self._text)
+            sentence.words = parsed.words
+            sentence.multiwordTokens = parsed.multiwordTokens
             return True
 
     ufal = ModuleType("ufal")
     udpipe = ModuleType("ufal.udpipe")
     udpipe.Model = _Model  # type: ignore[attr-defined]
-    udpipe.Sentence = lambda: SimpleNamespace(words=[])  # type: ignore[attr-defined]
+    udpipe.Sentence = lambda: SimpleNamespace(words=[], multiwordTokens=[])  # type: ignore[attr-defined]
     udpipe.ProcessingError = lambda: None  # type: ignore[attr-defined]
     ufal.udpipe = udpipe  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "ufal", ufal)
