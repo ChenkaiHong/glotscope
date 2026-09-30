@@ -210,11 +210,28 @@ def _hub_vocab_size_config(download: Any, model_id: str, revision: str | None) -
     ``None`` rather than the tokenizer's own count: equal values are a *claim*
     that the embedding matrix has no padding rows, and that claim is exactly what
     §7.9's reference-set chain reads at link 2.
+
+    Only an absent file reads as ``None``. Any other failure to fetch it —
+    network, auth, a server error — raises: ``null`` in the manifest is a claim
+    that the repository publishes no config.json, and a failed request is not
+    evidence of that.
+
+    Raises:
+        TokenizerLoadError: if the file exists or might, but could not be fetched.
     """
+    from huggingface_hub.errors import EntryNotFoundError
+
     try:
         path = Path(download(model_id, _CONFIG_FILE, revision=revision))
-    except Exception:
+    except EntryNotFoundError:
         return None
+    except Exception as exc:
+        raise TokenizerLoadError(
+            model_id,
+            f"could not fetch {_CONFIG_FILE} ({exc}). Recording its vocab_size as "
+            f"null would claim the repository publishes none, which a failed request "
+            f"does not show",
+        ) from exc
     try:
         config: Mapping[str, Any] = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):

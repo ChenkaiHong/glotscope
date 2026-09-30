@@ -205,3 +205,26 @@ def test_a_repo_without_a_tokenizer_json_is_a_typed_refusal(
         Tokenizer.from_pretrained("acme/sentencepiece-only")
 
     assert "tokenizer.json" in str(excinfo.value)
+
+
+def test_a_config_that_cannot_be_fetched_is_an_error_not_an_absence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``vocab_size_config: null`` is a claim that the repository publishes no
+    config.json. A network failure is not that claim, and recording it as one put
+    a false statement in a manifest other people cite."""
+    import huggingface_hub
+
+    repo = _write_repo(tmp_path)
+    _mock_hub(monkeypatch, repo)
+    served = huggingface_hub.hf_hub_download
+
+    def _flaky(repo_id: str, filename: str, **kwargs: Any) -> str:
+        if filename == "config.json":
+            raise ConnectionError("simulated network failure")
+        return str(served(repo_id, filename, **kwargs))
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", _flaky)
+
+    with pytest.raises(TokenizerLoadError, match=r"config\.json"):
+        Tokenizer.from_pretrained("acme/model", revision=_RESOLVED)
