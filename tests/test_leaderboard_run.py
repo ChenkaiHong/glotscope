@@ -21,8 +21,17 @@ from tokenizers import Tokenizer as BackendTokenizer
 from tokenizers import decoders, models, pre_tokenizers
 
 from glotscope.corpus import Corpus
-from glotscope.errors import TokenizerLoadError
-from glotscope.leaderboard import LeaderboardRow, RosterEntry, load_config, run_leaderboard
+from glotscope.enums import Segmenter
+from glotscope.errors import CapabilityError, TokenizerLoadError
+from glotscope.leaderboard import (
+    CorpusPlan,
+    LeaderboardConfig,
+    LeaderboardRow,
+    ParameterPlan,
+    RosterEntry,
+    load_config,
+    run_leaderboard,
+)
 from glotscope.lint import byte_to_unicode
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -398,3 +407,23 @@ def test_a_tier_2_row_verifies_with_the_inputs_that_produced_it(
 
     assert exit_code == 0, capsys.readouterr().err
     assert "reproduced" in capsys.readouterr().out
+
+
+def test_a_board_wide_refusal_fails_the_board(tmp_path: Path, toy_encoding: Any) -> None:
+    """A CapabilityError is a property of the corpus and the parameters, never of
+    one artifact — so it cannot be a per-row skip. Treating it as one skipped
+    every row and published an empty board with exit 0."""
+    root = _corpus_root(tmp_path)
+    config = LeaderboardConfig(
+        corpus=CorpusPlan(
+            id="flores_plus",
+            languages=("eng_Latn", "hin_Deva"),
+            version="2024.08",
+            split="devtest",
+        ),
+        parameters=ParameterPlan(segmenter=Segmenter.UD_GOLD),
+        roster=(RosterEntry(id="tiktoken:toy"),),
+    )
+
+    with pytest.raises(CapabilityError):
+        run_leaderboard(config, corpus_root=root)

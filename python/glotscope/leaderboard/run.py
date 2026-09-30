@@ -22,7 +22,6 @@ from glotscope import __version__, backend
 from glotscope.corpus import Corpus, LoadedCorpus
 from glotscope.embeddings import Embeddings
 from glotscope.errors import (
-    CapabilityError,
     NoReferenceSetError,
     TokenizerLoadError,
     UnsupportedCheckpointError,
@@ -70,7 +69,6 @@ _UNREACHABLE: tuple[type[Exception], ...] = (
     TokenizerLoadError,
     UnsupportedCheckpointError,
     NoReferenceSetError,
-    CapabilityError,
     ModuleNotFoundError,
     OSError,
 )
@@ -80,6 +78,11 @@ Each is a typed refusal or a missing file — the shapes a gated repository, an
 absent extra and a mistyped path arrive in. Nothing broader: a bug must not be
 able to enter this list by accident, which is what catching ``Exception`` would
 allow.
+
+``CapabilityError`` is deliberately absent. It is a property of the corpus and
+the parameters, never of one artifact, so it fails every row the same way; as a
+skip it published an empty board as a success. ``load_config`` refuses those
+combinations up front, and anything that slips past fails the board.
 """
 
 

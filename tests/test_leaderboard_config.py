@@ -341,3 +341,45 @@ def test_local_weights_need_no_revision(tmp_path: Path) -> None:
 
     assert config.roster[0].weights == "./local.safetensors"
     assert config.roster[0].weights_revision is None
+
+
+def _with_parameter(line: str) -> str:
+    return _MINIMAL.replace(
+        "  parity_reference: eng_Latn\n", f"  parity_reference: eng_Latn\n  {line}\n"
+    )
+
+
+@pytest.mark.parametrize("segmenter", ["stanza", "udpipe"])
+def test_a_segmenter_that_needs_a_model_file_is_refused(tmp_path: Path, segmenter: str) -> None:
+    """Both need a pinned model file, and the config has no key to name one. The
+    board used to accept this and then fail every row with advice about a Python
+    argument nobody running the CLI can pass."""
+    with pytest.raises(ConfigError, match="model"):
+        load_config(_write(tmp_path, _with_parameter(f"segmenter: {segmenter}")))
+
+
+def test_ud_gold_on_a_corpus_without_gold_boundaries_is_refused(tmp_path: Path) -> None:
+    """§7.1 rule 1. FLORES+ has no gold word boundaries; this used to skip every
+    row with the same CapabilityError and publish an empty board as a success."""
+    with pytest.raises(ConfigError, match="word_segmentation"):
+        load_config(_write(tmp_path, _with_parameter("segmenter: ud_gold")))
+
+
+@pytest.mark.parametrize("parameter", ["gini: true", "parity_reference: eng_Latn"])
+def test_a_parallel_only_metric_on_a_monolingual_corpus_is_refused(
+    tmp_path: Path, parameter: str
+) -> None:
+    text = (
+        "version: 1\n"
+        "corpus:\n"
+        "  id: fineweb2\n"
+        "  version: sample-1\n"
+        "  languages: [eng_Latn, hin_Deva]\n"
+        "parameters:\n"
+        f"  {parameter}\n"
+        "roster:\n"
+        '  - id: "tiktoken:o200k_base"\n'
+    )
+
+    with pytest.raises(ConfigError, match="parallel"):
+        load_config(_write(tmp_path, text))

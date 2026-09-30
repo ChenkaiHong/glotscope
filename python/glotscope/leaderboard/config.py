@@ -22,7 +22,8 @@ from pathlib import Path
 from typing import Any
 
 from glotscope.corpus import REGISTRY
-from glotscope.enums import Normalization, RenyiNormalizer, Segmenter
+from glotscope.enums import Capability, Normalization, RenyiNormalizer, Segmenter
+from glotscope.segmenters import requires_model
 
 __all__ = [
     "ConfigError",
@@ -309,6 +310,41 @@ def _roster(rows: Any) -> tuple[RosterEntry, ...]:
     return tuple(entries)
 
 
+def _require_supported(plan: ParameterPlan, *, corpus_id: str) -> ParameterPlan:
+    """Refuse a parameter the whole board could never compute.
+
+    Each of these is a property of the corpus and the parameters together, never
+    of one artifact, so reaching the run would fail every row the same way — and
+    a row-level failure is a skip, which published an empty board as a success.
+    """
+    capabilities = REGISTRY[corpus_id].capabilities
+    segmenter = plan.segmenter
+    if segmenter is not None and requires_model(segmenter):
+        raise ConfigError(
+            f"parameters.segmenter: {segmenter.value} needs a pinned model file, "
+            f"and the leaderboard config has no key to name one. Use a rule-based "
+            f"segmenter here, or run `glotscope analyze --segmenter-model` per model."
+        )
+    if (
+        segmenter is not None
+        and segmenter.requires_gold_segmentation
+        and Capability.WORD_SEGMENTATION not in capabilities
+    ):
+        raise ConfigError(
+            f"parameters.segmenter: {segmenter.value} reads gold word boundaries, and "
+            f"corpus {corpus_id!r} declares no {Capability.WORD_SEGMENTATION.value} "
+            f"(§7.1 rule 1)."
+        )
+    wanted = (("gini", plan.gini), ("parity_reference", plan.parity_reference is not None))
+    parallel_only = [name for name, requested in wanted if requested]
+    if parallel_only and Capability.PARALLEL not in capabilities:
+        raise ConfigError(
+            f"parameters.{parallel_only[0]}: needs a {Capability.PARALLEL.value} "
+            f"corpus, and {corpus_id!r} declares none. Gating is on capability (D5)."
+        )
+    return plan
+
+
 def _require_commits(entry: RosterEntry, *, where: str) -> None:
     """Refuse a row pinned by anything but a commit, and unpinned Hub weights.
 
@@ -386,9 +422,12 @@ def load_config(path: str | Path) -> LeaderboardConfig:
     corpus = _corpus(_require_mapping(document.get("corpus"), where="corpus"))
     return LeaderboardConfig(
         corpus=corpus,
-        parameters=_parameters(
-            _require_mapping(document.get("parameters") or {}, where="parameters"),
-            languages=corpus.languages,
+        parameters=_require_supported(
+            _parameters(
+                _require_mapping(document.get("parameters") or {}, where="parameters"),
+                languages=corpus.languages,
+            ),
+            corpus_id=corpus.id,
         ),
         roster=_roster(document.get("roster")),
         version=int(document.get("version", 1)),
