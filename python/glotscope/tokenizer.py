@@ -135,6 +135,12 @@ _UNPINNED_WARNING = (
     "exists to catch"
 )
 
+_NO_HUB_CONFIG_WARNING = (
+    "this repository publishes no config.json, so vocab_size_config is recorded "
+    "as null; §7.9's reference chain reads the gap between it and the "
+    "tokenizer's own count, and back-filling would assert there is none"
+)
+
 HUB_SOURCE = "huggingface"
 """``TokenizerManifest.source`` for a tokenizer fetched from the Hub. Named because
 ``verify`` reads it back: a result from the Hub is regenerated from the Hub."""
@@ -148,13 +154,6 @@ def unpinned_warning(model_id: str, resolved: str) -> str:
     did not pin, and regenerating that run means not pinning either.
     """
     return _UNPINNED_WARNING.format(model_id=model_id, resolved=resolved)
-
-
-_NO_HUB_CONFIG_WARNING = (
-    "this repository publishes no config.json, so vocab_size_config is recorded "
-    "as null; §7.9's reference chain reads the gap between it and the "
-    "tokenizer's own count, and back-filling would assert there is none"
-)
 
 
 def _tiktoken() -> Any:

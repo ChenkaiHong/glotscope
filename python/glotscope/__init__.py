@@ -11,14 +11,27 @@ every number here as descriptive.
 Public surface (PRD §8.1)::
 
     import glotscope as gs
+    from glotscope.reporting import attach_tier2, build_report
 
-    tok  = gs.Tokenizer.from_pretrained("Qwen/Qwen3-8B", revision="<sha>")
-    lint = tok.lint()                                    # Tier 0, milliseconds
-    t1   = tok.analyze(corpus, segmenter=gs.Segmenter.STANZA)   # Tier 1
-    emb  = gs.Embeddings.from_checkpoint("Qwen/Qwen3-8B", revision="<sha>")
-    t2   = tok.detect_undertrained(emb, top_pct=2.0)     # Tier 2
+    tok    = gs.Tokenizer.from_pretrained("Qwen/Qwen3-8B", revision="<commit sha>")
+    lint   = tok.lint()                                   # Tier 0, milliseconds
+    corpus = gs.Corpus.flores_plus(["eng_Latn", "hin_Deva"]).load("<corpus root>")
+    t1     = tok.analyze(corpus, segmenter=gs.Segmenter.STANZA,
+                         segmenter_model="<pinned stanza tokenizer .pt>")   # Tier 1
+    t1.parity(reference="eng_Latn").worst_case_parity
+    emb    = gs.Embeddings.from_checkpoint("Qwen/Qwen3-8B", revision="<commit sha>")
+    t2     = tok.detect_undertrained(emb, top_pct=2.0)    # Tier 2
 
-    gs.Report(tier0=lint, tier1=t1, tier2=t2).to_json("result.json")
+    # One §9 document spanning the tiers, manifest included (G2, G4). A Report
+    # is built with its manifest, which these assemble; it is not a bag of tiers.
+    report = build_report(
+        tok, corpus, leading_space=True, normalization=gs.Normalization.NFC,
+        add_special_tokens=False, segmenter=gs.Segmenter.STANZA,
+        segmenter_model="<pinned stanza tokenizer .pt>", parity_reference="eng_Latn",
+        gini=True, renyi_alpha=2.5, renyi_normalizer=gs.RenyiNormalizer.OBSERVED,
+        nominal_vocab_size=None,
+    )
+    attach_tier2(report, tok, emb, top_pct=2.0).to_json("result.json")
 """
 
 from __future__ import annotations
