@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from tokenizers import Tokenizer as BackendTokenizer
@@ -427,3 +427,39 @@ def test_a_board_wide_refusal_fails_the_board(tmp_path: Path, toy_encoding: Any)
 
     with pytest.raises(CapabilityError):
         run_leaderboard(config, corpus_root=root)
+
+
+def test_a_mirror_rows_manifest_says_it_is_a_mirror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§11: mirror-sourced rows are visibly labelled. The Markdown label came
+    from the config, but the row's own manifest — what a reader of
+    leaderboard.json and ``verify`` see — recorded ``source_is_mirror: false``,
+    because the flag never reached the loader."""
+    import huggingface_hub
+    from huggingface_hub.errors import EntryNotFoundError
+
+    commit = "e" * 40
+    tokenizer_json = _local_tokenizer(tmp_path)
+
+    def _download(repo_id: str, filename: str, **_: Any) -> str:
+        if filename != "tokenizer.json":
+            raise EntryNotFoundError(filename)
+        return str(tokenizer_json)
+
+    class _Info:
+        sha = commit
+        card_data: ClassVar[dict[str, str]] = {}
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", _download)
+    monkeypatch.setattr(huggingface_hub, "model_info", lambda *a, **k: _Info())
+    root = _corpus_root(tmp_path)
+    config = _config(
+        tmp_path,
+        [{"id": "acme/model", "revision": commit, "is_mirror": True, "note": "re-upload"}],
+    )
+
+    row = run_leaderboard(config, corpus_root=root).to_dict()["rows"][0]
+
+    assert row["skipped"] is None
+    assert row["result"]["manifest"]["tokenizer"]["source_is_mirror"] is True

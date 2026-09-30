@@ -214,7 +214,7 @@ def _run_row(
     top_pct: float,
 ) -> LeaderboardRow:
     try:
-        tokenizer = load_tokenizer(entry.id, entry.revision)
+        tokenizer = load_tokenizer(entry.id, entry.revision, is_mirror=entry.is_mirror)
         if loaded is None:
             return LeaderboardRow(entry=entry, result=_tier0_only(tokenizer, config).to_dict())
         report: Report = build_report(
