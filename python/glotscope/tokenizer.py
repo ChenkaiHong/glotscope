@@ -994,7 +994,19 @@ class Tokenizer:
                 )
                 byte_lengths.extend(chunk_bytes)
                 is_blank.extend(not text.strip() for text in texts)
-                matched, _ = roundtrip_matches_from_ids(self._backend, texts, token_ids)
+                # Round-trip is scored on the text's own encoding (§7.8). Specials
+                # a post-processor template adds are not part of the text, and
+                # decoding them back failed every document for a reason that has
+                # nothing to do with losslessness; the counts above keep them.
+                text_ids = (
+                    [
+                        encoding.ids
+                        for encoding in self._backend.encode_batch(texts, add_special_tokens=False)
+                    ]
+                    if add_special_tokens
+                    else token_ids
+                )
+                matched, _ = roundtrip_matches_from_ids(self._backend, texts, text_ids)
                 roundtrip_matches += matched
             stats = DocumentStats.combine(chunks)
             if stats.n_empty_documents:

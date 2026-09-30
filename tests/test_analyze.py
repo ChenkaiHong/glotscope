@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 from tokenizers import Tokenizer as BackendTokenizer
-from tokenizers import decoders, models, normalizers, pre_tokenizers
+from tokenizers import decoders, models, normalizers, pre_tokenizers, processors
 
 from glotscope import __version__, backend
 from glotscope.corpus import Corpus, LoadedCorpus
@@ -445,3 +445,35 @@ def test_strr_on_a_prepending_tokenizer_counts_no_phantom_boundary(tmp_path: Pat
     strr = report.per_language["eng_Latn"].strr
     assert strr is not None
     assert (strr.bare, strr.leading_space) == (100.0, 100.0)
+
+
+def _bos_template(tmp_path: Path) -> Tokenizer:
+    """The byte-level fixture with a template that prepends ``<s>`` to every input."""
+    mapping = byte_to_unicode()
+    backend_tokenizer = BackendTokenizer(
+        models.BPE(vocab={mapping[v]: v for v in range(256)}, merges=[])
+    )
+    backend_tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    backend_tokenizer.decoder = decoders.ByteLevel()
+    backend_tokenizer.add_special_tokens(["<s>"])
+    backend_tokenizer.post_processor = processors.TemplateProcessing(
+        single="<s> $A", special_tokens=[("<s>", 256)]
+    )
+    path = tmp_path / "bos.json"
+    backend_tokenizer.save(str(path))
+    return Tokenizer.from_file(path)
+
+
+def test_round_trip_is_scored_on_the_text_not_on_the_specials_a_template_adds(
+    tmp_path: Path,
+) -> None:
+    """§7.8: a rate below 1.0 is a defect in the tokenizer. With
+    ``add_special_tokens`` the BOS a template prepends decoded back as ``<s>``,
+    so every document "failed" and the rate read 0.0 for a lossless tokenizer."""
+    report = _bos_template(tmp_path).analyze(_parallel(tmp_path), add_special_tokens=True)
+
+    for language, lines in (("eng_Latn", _ENGLISH), ("hin_Deva", _HINDI)):
+        metrics = report.per_language[language]
+        assert metrics.roundtrip_rate == 1.0
+        # The specials still count where they are tokens a model is fed.
+        assert metrics.compression.ctc == _utf8_bytes(lines) + len(lines)
