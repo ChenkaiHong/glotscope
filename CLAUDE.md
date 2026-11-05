@@ -21,9 +21,13 @@ uv run --no-sync ruff check python/glotscope tests
 uv run --no-sync ruff format --check python/glotscope tests
 uv run --no-sync mypy --strict python/glotscope tests
 uv run --no-sync pytest --cov=glotscope --cov-report=term-missing -q   # gate: 85%
+uv run --no-sync glotscope verify verification/result.json \
+    --tokenizer verification/tokenizer.json --corpus-root verification/corpus   # G4
 ```
 
-Baseline as of 22 Sep 2026: **674 passed, 1 skipped, 98.41% coverage** on 3.13 with FLORES+ on disk; **659 passed, 16 skipped** on the 3.10 floor; ruff/format/mypy clean. Coverage below 85% fails the run, so `--cov` is not optional when judging a change.
+Baseline as of 22 Sep 2026: **674 passed, 1 skipped, 98.41% coverage** on 3.13 with FLORES+ on disk and the segmenter extras installed; **659 passed, 16 skipped** on the 3.10 floor; ruff/format/mypy clean. Coverage below 85% fails the run, so `--cov` is not optional when judging a change.
+
+A checkout with `.[dev]` alone — every cloud session — reads **654 passed, 21 skipped, 97.47%** on 3.13 and 654/21 on the floor (re-checked 5 Nov 2026 at `56f471c`). The 21 are 5 gated FLORES+ tests plus 16 segmenter-extra tests, and are expected rather than a regression. The FLORES+ tests look under `$GLOTSCOPE_CORPUS_ROOT` (default `~/corpora`) for `flores_plus/2024.08/devtest/`, which `scripts/fetch_flores_plus.py` writes once the dataset's terms are accepted and `HF_TOKEN` is exported.
 
 `.[dev]` installs the extras too. The **core install is `tokenizers` alone** — `numpy`/`safetensors` are the `tier2` extra and `tiktoken` is its own, because G1's clean-install promise is measured on a core install that only claims Tier 0 and Tier 1. Import either inside the function that needs it and name the extra when it is missing.
 
@@ -59,6 +63,14 @@ make upload REPOSITORY=pypi     # -> PyPI
 
 `make leak-check` is mandatory after any change to `pyproject.toml` packaging keys. A published sdist cannot be retracted; `include` is an allowlist and `exclude` is a second guard.
 
+`scripts/` regenerates what is committed. Run the script rather than hand-editing its output; each module docstring carries the exact invocation:
+
+- `fetch_flores_plus.py` writes a FLORES+ tree under `--root` (gated; resolves the revision before fetching)
+- `generate_script_table.py` writes `python/glotscope/data/unicode-scripts.json` from a pinned UCD (D14)
+- `validate_tier2_reference.py` writes `data/tier2-reference-validation.json` against magikarp files pinned by commit
+- `audit_ud_licenses.py` writes `data/ud-license-audit.json`; `audit_stanza_languages.py` checks `segmenters/stanza_languages.py` when the Stanza pin moves (network)
+- `mutate_conditionals.py` generates nothing. coverage.py does not count `X if C else Y` as a branch, so the 85% gate cannot see an untested side of a conditional expression; this forces each side and lists the survivors. It takes minutes, so it is a deliberate sweep, not a CI job.
+
 ## Repository state (22 Sep 2026)
 
 M0 and M1 are closed and **v0.1.0 is on PyPI** (20 Aug 2026). M2's substance is built; M3 (docs site, HF Space, launch) is the head of the queue. `PROGRESS.md` holds the live Done / Next / Blocked. Git repo with public remote `ChenkaiHong/glotscope`; **the default branch is `foundation`, not `main`** — CI push events trigger on `foundation` and PRs target it. `master` is a stale local branch.
@@ -75,7 +87,7 @@ Nothing is `NotImplementedError`: `segmenters._UNBUILT` is empty, and `STANZA`/`
 
 `verification/` holds the fixture: four invented sentences under a `verification_fixture` registry entry (CC0), plus the tokenizer and the result. It is the one exception to D12 and an exception in name only — a verification job with no inputs cannot run. Its id is its own rather than borrowed from a real corpus, so the manifest tells the truth about what was measured. `.gitattributes` marks `verification/**` as `-text`, because the digest is over the bytes on disk and a CRLF checkout on Windows would fail the job for a reason unrelated to any number. The fixture sits outside the sdist allowlist, so `tests/test_g4_verification.py` runs from a checkout and skips from an unpacked release.
 
-**The leaderboard is built.** `glotscope leaderboard --config leaderboard.yaml --out results/ --corpus-root <root>` regenerates `results/leaderboard.{json,md}` — 13 rows published, 3 SentencePiece-only rows skipped with the §3.2 reason. Regenerate, never hand-edit; `--check results/leaderboard.json` proves a regeneration moved no number. `.github/workflows/nightly.yml` runs that check at 04:00 UTC over **Tier 0 only**, because FLORES+ is gated; upgrading needs an `HF_TOKEN` secret and the corpus restored in the workflow. **Scheduled workflows run only from the default branch**, so a nightly job that exists only on a PR branch has never fired.
+**The leaderboard is built.** `glotscope leaderboard --config leaderboard.yaml --out results/ --corpus-root <root>` regenerates `results/leaderboard.{json,md}` — 13 rows published, 3 SentencePiece-only rows skipped with the §3.2 reason. Regenerate, never hand-edit; `--check results/leaderboard.json` proves a regeneration moved no number. `.github/workflows/nightly.yml` runs that check at 04:00 UTC over **Tier 0 only** (`--check-tiers tier0 --corpus-root .`), because FLORES+ is gated; upgrading needs an `HF_TOKEN` secret and the corpus restored in the workflow. **Scheduled workflows run only from the default branch**, so a nightly job that exists only on a PR branch has never fired.
 
 No roster row configures `weights:` yet, so the board holds no Tier 2 measurement. The Tier 2 cell says what the board did, never what the model lacks: `n/a (tokenizer-only)` is reserved for `tiktoken:` encodings, and a model row without weights reads `not run (no weights configured)`. The first board printed the tokenizer-only label beside nine models whose weights are published; a test now checks every committed label against the runner.
 
@@ -91,7 +103,9 @@ PyPI name reserved 10 Aug 2026 with a 0.0.0 placeholder; **v0.1.0 published 20 A
 
 `glotscope-PRD.md` and `HISTORY.md` in the repo root are **symlinks** into `../glotscope-internal/` — a separate private git repo (`ChenkaiHong/glotscope-internal`, branch `docs/internal-record`). Editing either writes into that repo and needs its own commit and push there; nothing in this tree records their content. Both paths are gitignored here and excluded from every distribution — the PRD was once committed and had to be purged from history, which is why the leak check exists.
 
-`PROGRESS.md` (gitignored) is the short live state file: Done / Next / Blocked. Keep it current during long or unattended work — `AGENTS.md` requires it alongside `HISTORY.md`.
+A cloud checkout has none of these. The symlinks are gitignored and the sibling is not cloned, so the PRD cannot be grepped and `HISTORY.md` cannot be appended to until `ChenkaiHong/glotscope-internal` is attached and cloned to `../glotscope-internal/`. Until then, the PRD is known here only through what this file quotes.
+
+`PROGRESS.md` (gitignored) is the short live state file: Done / Next / Blocked. Keep it current during long or unattended work, alongside `HISTORY.md`.
 
 ## Normative sources
 
